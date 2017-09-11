@@ -1,34 +1,34 @@
 package tx
 
 const (
-    LOGSIZE = 4*1024
+	LOGSIZE = 4 * 1024
 )
 
 /*
- * basic info of current transcation and 
+ * basic info of current transcation and
  * the inital log area.
  * currently just place holder
  */
 type txHeader struct {
-    log [LOGSIZE]byte
+	log [LOGSIZE]byte
 }
 
 func Init(data []byte, size int) {
-    // currently do nothing
+	/* currently only support simple undo logging. */
+	initUndo(data[:LOGSIZE])
 }
 
 /* begin a transaction */
 func Begin() {
-    // currently do nothing
+	// currently do nothing
 }
 
 /* commit a transaction */
 func Commit() {
-    // currently do nothing
+	commitUndo()
 }
 
 /* abort a transaction */
 func Abort() {
-    // currently do nothing
+	rollbackUndo()
 }
-
