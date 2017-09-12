@@ -18,43 +18,38 @@ type heapHeader struct {
 }
 
 var (
-    _header heapHeader
+    _header *heapHeader
     _data []byte
 )
 
 func Init(data []byte, size int) {
     _data = data
-    hdSize := int(unsafe.Sizeof(_header))
-    headerSlice := (*[1<<30]byte)(unsafe.Pointer(&_header))[:hdSize:hdSize]
-    copy(headerSlice, _data)
+    _header = (*heapHeader)(unsafe.Pointer(&_data[0]))
+    hdSize := int(unsafe.Sizeof(*_header))
+
+    tx.Begin()
+    tx.LogUndo(_header)
     if _header.end == 0 {
         // first time initialization
         _header.end = size
         _header.offset = hdSize
-        tx.Begin()
-        tx.UpdateRedo(unsafe.Pointer(&_data[0]), 
-                      unsafe.Pointer(&_header), 
-                      unsafe.Sizeof(_header))
-        tx.Commit()
-        // log.Println("heap header initialized: ", _header)
     } else {
         if _header.end != size {
             log.Fatal("Heap size does not match!")
         }
     }
+    tx.Commit()
 }
 
 func Alloc(size int) unsafe.Pointer {
     offset := uintptr(_header.offset)
-    _header.offset += size
-    if _header.offset < _header.end {
-        tx.Begin()
-        tx.UpdateRedo(unsafe.Pointer(&_data[0]), 
-                      unsafe.Pointer(&_header), 
-                      unsafe.Sizeof(_header))
-        tx.Commit()
+    tx.Begin()
+    tx.LogUndo(_header)
+    if _header.offset + size < _header.end {
+        _header.offset += size
     } else {
         log.Fatal("Run out of heap!")
     }
+    tx.Commit()
     return unsafe.Pointer(&_data[offset])
 }

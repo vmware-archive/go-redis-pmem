@@ -19,18 +19,17 @@ type List struct {
 }
 
 func (l *List) Insert(key int) {
+    // put allocation outside tx as we do not support nested transaction yet.
+    var node *Node 
+    node = (*Node)(heap.Alloc(int(unsafe.Sizeof(*node))))
+    
     tx.Begin()
-    node := Node{l.head, key}
-    nptr := heap.Alloc(int(unsafe.Sizeof(node)))
-    tx.UpdateRedo(nptr, 
-                  unsafe.Pointer(&node), 
-                  unsafe.Sizeof(node))
-    var tmpl List = *l
-    tmpl.head = (*Node)(nptr)
-    tmpl.len = l.len + 1
-    tx.UpdateRedo(unsafe.Pointer(l), 
-                  unsafe.Pointer(&tmpl), 
-                  unsafe.Sizeof(tmpl))
+    tx.LogUndo(node) // TODO: may shadow update node here.
+    node.next = l.head
+    node.key = key
+    tx.LogUndo(l)
+    l.head = node
+    l.len += 1
     tx.Commit()
 }  
 
@@ -47,22 +46,14 @@ func (l *List) Show() {
 func (l *List) Swizzle() {
     // fmt.Println("Swizzle list:", l)
     tx.Begin()
-    tmpl := *l
-    tmpl.head = (*Node)(region.Swizzle(unsafe.Pointer(tmpl.head)))
-    tx.UpdateRedo(unsafe.Pointer(l), 
-                  unsafe.Pointer(&tmpl), 
-                  unsafe.Sizeof(tmpl))
-    nptr := tmpl.head
+    tx.LogUndo(l)
+    l.head = (*Node)(region.Swizzle(unsafe.Pointer(l.head)))
     // fmt.Println(l)
+    tmpnode := l.head
     for i := 0; i < l.len; i++ {
-        // fmt.Println("Node before swizzle:",nptr)
-        tmpnode := *nptr
+        tx.LogUndo(tmpnode)
         tmpnode.next = (*Node)(region.Swizzle(unsafe.Pointer(tmpnode.next)))
-        tx.UpdateRedo(unsafe.Pointer(nptr), 
-                      unsafe.Pointer(&tmpnode), 
-                      unsafe.Sizeof(tmpnode))
-        // fmt.Println("Node after swizzle:",nptr)
-        nptr = tmpnode.next
+        tmpnode = tmpnode.next
     }
     tx.Commit()
 }

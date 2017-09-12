@@ -26,7 +26,7 @@ type pmemHeader struct {
 }
 
 // a volaitle copy of the region header
-var _region pmemHeader
+var _region *pmemHeader
 
 func mmap(fname string, size int) (fdata []byte) {
     f, err := os.OpenFile(fname, 
@@ -55,10 +55,8 @@ func Init(pathname string, size, uuid int) {
     fdata := mmap(pathname, size)
 
     // (2) read pmem header from mmaped region
-    hdSize := int(unsafe.Sizeof(_region))
-    // hack here (unsafe): directly convert pointer to byte array
-    regionSlice := (*[1<<30]byte)(unsafe.Pointer(&_region))[:hdSize:hdSize]
-    copy(regionSlice, fdata)    
+    _region = (*pmemHeader)(unsafe.Pointer(&fdata[0]))
+    hdSize := int(unsafe.Sizeof(*_region))
 
     // (3) init log and heap
     tx.Init(fdata[hdSize:(hdSize + tx.LOGSIZE)], size - hdSize)
@@ -66,22 +64,17 @@ func Init(pathname string, size, uuid int) {
     heap.Init(fdata[heapOffset:], size - heapOffset)
 
     // (4) update pmem region header
+    tx.Begin()
+    tx.LogUndo(_region)
     if _region.uuid == 0 {
-        // first time initialization
+        log.Println("Initializing empty region.") 
         _region.magic = MAGIC
         _region.uuid = uuid
         _region.size = size
         _region.offset = uintptr(unsafe.Pointer(&fdata[0]))
         _region.oldOffset = _region.offset
-        tx.Begin()
-        tx.UpdateRedo(unsafe.Pointer(&fdata[0]), 
-                      unsafe.Pointer(&_region), 
-                      unsafe.Sizeof(_region))
-        tx.Commit()
-        copy(regionSlice, fdata)
-        // log.Println("region header initialized: ", _region)
     } else if _region.uuid == uuid {
-        // retrieve existing region
+        log.Println("Retriving region info.") 
         if _region.magic != MAGIC {
             log.Fatal("Region magic does not match!")
         }
@@ -90,26 +83,17 @@ func Init(pathname string, size, uuid int) {
         }
         _region.oldOffset = _region.offset
         _region.offset = uintptr(unsafe.Pointer(&fdata[0]))
-        tx.Begin()
-        tx.UpdateRedo(unsafe.Pointer(&fdata[0]), 
-                      unsafe.Pointer(&_region), 
-                      unsafe.Sizeof(_region))
-        tx.Commit()
-        copy(regionSlice, fdata)
-        // log.Println("region header updated: ", _region)
     } else {
         log.Fatal("Region uuid does not match!")
     }
+    tx.Commit()
 }
 
 func SetRoot(ptr unsafe.Pointer) {
-    _region.rootOffset = uintptr(ptr) - _region.offset
     tx.Begin()
-    tx.UpdateRedo(unsafe.Pointer(_region.offset), 
-                  unsafe.Pointer(&_region), 
-                  unsafe.Sizeof(_region))
+    tx.LogUndo(&_region.rootOffset)
+    _region.rootOffset = uintptr(ptr) - _region.offset
     tx.Commit()
-    // log.Println("root offset updated: ", _region)
 }
 
 func GetRoot() unsafe.Pointer {
