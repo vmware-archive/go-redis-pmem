@@ -120,6 +120,98 @@ func TestLog(t *testing.T) {
 	assertEqual(t, slice1[99], 0)
 }
 
+func TestNestedTx(t *testing.T) {
+	setup()
+
+	fmt.Println("Testing nested tx commit.")
+	Begin()
+	LogUndo(slice1)
+	slice1[0] = 0
+		Begin()
+		LogUndo(slice1)
+		slice1[1] = 1
+			Begin()
+			LogUndo(slice1)
+			slice1[2] = 2
+			Commit()
+		Commit()
+		Begin()
+		LogUndo(slice1)
+		slice1[3] = 3
+		Commit()
+	Commit()
+	assertEqual(t, slice1[0], 0)
+	assertEqual(t, slice1[1], 1)
+	assertEqual(t, slice1[2], 2)
+	assertEqual(t, slice1[3], 3)
+
+	fmt.Println("Testing nested tx abort inner.")
+	Begin()
+	LogUndo(slice1)
+	slice1[0] = 1
+		Begin()
+		LogUndo(slice1)
+		slice1[1] = 2
+			Begin()
+			LogUndo(slice1)
+			slice1[2] = 3
+			Abort()			// only abort the current inner tx
+		Commit()
+		Begin()
+		LogUndo(slice1)
+		slice1[3] = 4
+		Commit()
+	Commit()
+	assertEqual(t, slice1[0], 1)
+	assertEqual(t, slice1[1], 2)
+	assertEqual(t, slice1[2], 2)
+	assertEqual(t, slice1[3], 4)
+
+	fmt.Println("Testing nested tx abort middle.")
+	Begin()
+	LogUndo(slice1)
+	slice1[0] = 2
+		Begin()
+		LogUndo(slice1)
+		slice1[1] = 3
+			Begin()
+			LogUndo(slice1)
+			slice1[2] = 4
+			Commit()
+		Abort()
+		Begin()
+		LogUndo(slice1)
+		slice1[3] = 5
+		Commit()
+	Commit()
+	assertEqual(t, slice1[0], 2)
+	assertEqual(t, slice1[1], 2)
+	assertEqual(t, slice1[2], 2)
+	assertEqual(t, slice1[3], 5)
+
+	fmt.Println("Testing nested tx abort outer.")
+	Begin()
+	LogUndo(slice1)
+	slice1[0] = 3
+		Begin()
+		LogUndo(slice1)
+		slice1[1] = 3
+			Begin()
+			LogUndo(slice1)
+			slice1[2] = 3
+			Commit()
+		Commit()
+		Begin()
+		LogUndo(slice1)
+		slice1[3] = 6
+		Commit()
+	Abort()			// abort all operation include committed inner tx
+	assertEqual(t, slice1[0], 2)
+	assertEqual(t, slice1[1], 2)
+	assertEqual(t, slice1[2], 2)
+	assertEqual(t, slice1[3], 5)
+}
+
 func BenchmarkLogInt(b *testing.B) {
 	setup()
 	b.ResetTimer()

@@ -20,7 +20,7 @@ func Init(data []byte, size int) {
 
 /* begin a transaction */
 func Begin() {
-	// currently do nothing
+	beginUndo()
 }
 
 /* commit a transaction */
