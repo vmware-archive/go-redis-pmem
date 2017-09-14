@@ -1,6 +1,6 @@
 package tx
 
-/* 
+/*
  * Simple undo implementation:
  * (1) single threaded
  * (2) linear log buffer
@@ -13,30 +13,30 @@ package tx
 
 import (
 	"errors"
+	"log"
 	"reflect"
 	"unsafe"
-	"log"
 )
 
 type (
 	undoHeader struct {
-		tail int              // current offset of log buffer
+		tail int // current offset of log buffer
 	}
 
 	entryHeader struct {
 		offset uintptr
-		size int
+		size   int
 	}
 )
 
 var (
-	undoOff uintptr                 // offset of undo area
-	undoHdr *undoHeader				// transaction header
-	undoBuf logBuffer				// volatile wrapper for log buffer
-	undoEntry entryHeader			// volatile entry header
-	entrySlice []byte  				// underlying raw byte slice of undoEntry
-	level int 						// nested tx level
-	nest [10]int					// nested tx info
+	undoOff    uintptr     // offset of undo area
+	undoHdr    *undoHeader // transaction header
+	undoBuf    logBuffer   // volatile wrapper for log buffer
+	undoEntry  entryHeader // volatile entry header
+	entrySlice []byte      // underlying raw byte slice of undoEntry
+	level      int         // nested tx level
+	nest       [10]int     // nested tx info
 )
 
 func initUndo(data []byte) {
@@ -76,14 +76,14 @@ func LogUndo(data interface{}) error {
 	v := reflect.ValueOf(data)
 	bytes := 0
 	switch kind := v.Kind(); kind {
-		case reflect.Array:
-			fallthrough
-		case reflect.Slice:
-			bytes = v.Len() * int(v.Type().Elem().Size())
-		case reflect.Ptr:
-			bytes = int(v.Elem().Type().Size())
-		default:
-			return errors.New("tx.undo: Log data must be pointer/array/slice!")
+	case reflect.Array:
+		fallthrough
+	case reflect.Slice:
+		bytes = v.Len() * int(v.Type().Elem().Size())
+	case reflect.Ptr:
+		bytes = int(v.Elem().Type().Size())
+	default:
+		return errors.New("tx.undo: Log data must be pointer/array/slice!")
 	}
 	ptr := unsafe.Pointer(v.Pointer())
 
@@ -110,7 +110,7 @@ func beginUndo() error {
 	if level > 10 {
 		return errors.New("tx.undo: reached maximum nested transaction level!")
 	}
-	nest[level -1] = undoBuf.Tail()
+	nest[level-1] = undoBuf.Tail()
 	return nil
 }
 
@@ -119,12 +119,12 @@ func commitUndo() error {
 		return errors.New("tx.undo: no transaction to commit!")
 	}
 	/* Need to flush current value of logged areas. */
-	for undoBuf.Tail() > nest[level - 1] {
+	for undoBuf.Tail() > nest[level-1] {
 		_, err := undoBuf.Read(entrySlice)
 		if err != nil {
 			return err
 		}
-		
+
 		/* Flush change. */
 		// flush(undoEntry.offset, undoEntry.size)
 
@@ -143,18 +143,18 @@ func commitUndo() error {
 }
 
 func rollbackUndo() error {
-	for undoBuf.Tail() > nest[level - 1] {
+	for undoBuf.Tail() > nest[level-1] {
 		_, err := undoBuf.Read(entrySlice)
 		if err != nil {
 			return err
 		}
 		ptr := unsafe.Pointer(undoOff + undoEntry.offset)
-		_, err = undoBuf.Read((*[LOGSIZE]byte)(ptr)[:undoEntry.size:undoEntry.size]) 
+		_, err = undoBuf.Read((*[LOGSIZE]byte)(ptr)[:undoEntry.size:undoEntry.size])
 		if err != nil {
 			return err
 		}
 	}
-	if undoBuf.Tail() != nest[level - 1] {
+	if undoBuf.Tail() != nest[level-1] {
 		return errors.New("tx.undo: buffer not correctly parsed when rollback!")
 	}
 	setUndoHdr(undoBuf.Tail())

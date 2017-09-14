@@ -3,7 +3,7 @@ package tx
 /*
  * low level flush/fence, may need to call into c code
  */
- 
+
 import (
 	"unsafe"
 )

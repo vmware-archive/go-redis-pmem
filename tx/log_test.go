@@ -91,7 +91,7 @@ func TestLog(t *testing.T) {
 
 	Begin()
 	LogUndo(&s1)
-	*s1.iptr = 1000   // redirect update will not rollback
+	*s1.iptr = 1000 // redirect update will not rollback
 	s2.i = 3
 	s2.iptr = &s2.i
 	s2.slice = slice1
@@ -111,8 +111,8 @@ func TestLog(t *testing.T) {
 	fmt.Println("Testing slice abort.")
 	Begin()
 	LogUndo(slice1[:10])
-	slice2[9] = 9     
-	slice2[10] = 10    // out of range update will not rollback
+	slice2[9] = 9
+	slice2[10] = 10 // out of range update will not rollback
 	copy(slice1, slice2)
 	Abort()
 	assertEqual(t, slice1[9], 0)
@@ -127,18 +127,18 @@ func TestNestedTx(t *testing.T) {
 	Begin()
 	LogUndo(slice1)
 	slice1[0] = 0
-		Begin()
-		LogUndo(slice1)
-		slice1[1] = 1
-			Begin()
-			LogUndo(slice1)
-			slice1[2] = 2
-			Commit()
-		Commit()
-		Begin()
-		LogUndo(slice1)
-		slice1[3] = 3
-		Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[1] = 1
+	Begin()
+	LogUndo(slice1)
+	slice1[2] = 2
+	Commit()
+	Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[3] = 3
+	Commit()
 	Commit()
 	assertEqual(t, slice1[0], 0)
 	assertEqual(t, slice1[1], 1)
@@ -149,18 +149,18 @@ func TestNestedTx(t *testing.T) {
 	Begin()
 	LogUndo(slice1)
 	slice1[0] = 1
-		Begin()
-		LogUndo(slice1)
-		slice1[1] = 2
-			Begin()
-			LogUndo(slice1)
-			slice1[2] = 3
-			Abort()			// only abort the current inner tx
-		Commit()
-		Begin()
-		LogUndo(slice1)
-		slice1[3] = 4
-		Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[1] = 2
+	Begin()
+	LogUndo(slice1)
+	slice1[2] = 3
+	Abort() // only abort the current inner tx
+	Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[3] = 4
+	Commit()
 	Commit()
 	assertEqual(t, slice1[0], 1)
 	assertEqual(t, slice1[1], 2)
@@ -171,18 +171,18 @@ func TestNestedTx(t *testing.T) {
 	Begin()
 	LogUndo(slice1)
 	slice1[0] = 2
-		Begin()
-		LogUndo(slice1)
-		slice1[1] = 3
-			Begin()
-			LogUndo(slice1)
-			slice1[2] = 4
-			Commit()
-		Abort()
-		Begin()
-		LogUndo(slice1)
-		slice1[3] = 5
-		Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[1] = 3
+	Begin()
+	LogUndo(slice1)
+	slice1[2] = 4
+	Commit()
+	Abort()
+	Begin()
+	LogUndo(slice1)
+	slice1[3] = 5
+	Commit()
 	Commit()
 	assertEqual(t, slice1[0], 2)
 	assertEqual(t, slice1[1], 2)
@@ -193,19 +193,19 @@ func TestNestedTx(t *testing.T) {
 	Begin()
 	LogUndo(slice1)
 	slice1[0] = 3
-		Begin()
-		LogUndo(slice1)
-		slice1[1] = 3
-			Begin()
-			LogUndo(slice1)
-			slice1[2] = 3
-			Commit()
-		Commit()
-		Begin()
-		LogUndo(slice1)
-		slice1[3] = 6
-		Commit()
-	Abort()			// abort all operation include committed inner tx
+	Begin()
+	LogUndo(slice1)
+	slice1[1] = 3
+	Begin()
+	LogUndo(slice1)
+	slice1[2] = 3
+	Commit()
+	Commit()
+	Begin()
+	LogUndo(slice1)
+	slice1[3] = 6
+	Commit()
+	Abort() // abort all operation include committed inner tx
 	assertEqual(t, slice1[0], 2)
 	assertEqual(t, slice1[1], 2)
 	assertEqual(t, slice1[2], 2)

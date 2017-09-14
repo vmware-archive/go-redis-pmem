@@ -7,7 +7,7 @@ import (
 type logBuffer interface {
 	Write([]byte) (int, error)
 	Read([]byte) (int, error)
-	Tail() (int)
+	Tail() int
 	Rewind(int)
 	Clear()
 }

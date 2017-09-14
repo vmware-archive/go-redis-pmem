@@ -7,49 +7,49 @@ package heap
  */
 
 import (
-    "pmem/tx"
-    "log"
-    "unsafe"
+	"log"
+	"pmem/tx"
+	"unsafe"
 )
 
 type heapHeader struct {
-    offset,
-    end int
+	offset,
+	end int
 }
 
 var (
-    _header *heapHeader
-    _data []byte
+	_header *heapHeader
+	_data   []byte
 )
 
 func Init(data []byte, size int) {
-    _data = data
-    _header = (*heapHeader)(unsafe.Pointer(&_data[0]))
-    hdSize := int(unsafe.Sizeof(*_header))
+	_data = data
+	_header = (*heapHeader)(unsafe.Pointer(&_data[0]))
+	hdSize := int(unsafe.Sizeof(*_header))
 
-    tx.Begin()
-    tx.LogUndo(_header)
-    if _header.end == 0 {
-        // first time initialization
-        _header.end = size
-        _header.offset = hdSize
-    } else {
-        if _header.end != size {
-            log.Fatal("Heap size does not match!")
-        }
-    }
-    tx.Commit()
+	tx.Begin()
+	tx.LogUndo(_header)
+	if _header.end == 0 {
+		// first time initialization
+		_header.end = size
+		_header.offset = hdSize
+	} else {
+		if _header.end != size {
+			log.Fatal("Heap size does not match!")
+		}
+	}
+	tx.Commit()
 }
 
 func Alloc(size int) unsafe.Pointer {
-    offset := uintptr(_header.offset)
-    tx.Begin()
-    tx.LogUndo(_header)
-    if _header.offset + size < _header.end {
-        _header.offset += size
-    } else {
-        log.Fatal("Run out of heap!")
-    }
-    tx.Commit()
-    return unsafe.Pointer(&_data[offset])
+	offset := uintptr(_header.offset)
+	tx.Begin()
+	tx.LogUndo(_header)
+	if _header.offset+size < _header.end {
+		_header.offset += size
+	} else {
+		log.Fatal("Run out of heap!")
+	}
+	tx.Commit()
+	return unsafe.Pointer(&_data[offset])
 }
