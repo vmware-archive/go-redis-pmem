@@ -2,6 +2,7 @@ package tx
 
 import (
 	"errors"
+	"unsafe"
 )
 
 type logBuffer interface {
@@ -34,11 +35,11 @@ func (b *linearUndoBuffer) Write(input []byte) (n int, err error) {
 	remain := b.capacity - b.tail
 	if len(input) > remain {
 		return 0, errors.New("tx.buffer: Running out of log space!")
-	} else {
-		copy(b.buffer[b.tail:], input)
-		b.tail += len(input)
 	}
-	/* TODO: Need flush buffer updates here. */
+
+	copy(b.buffer[b.tail:], input)
+	Persist(unsafe.Pointer(&b.buffer[b.tail]), len(input))
+	b.tail += len(input)
 	return len(input), nil
 }
 
@@ -47,11 +48,11 @@ func (b *linearUndoBuffer) Read(output []byte) (n int, err error) {
 	has := b.tail
 	if len(output) > has {
 		return 0, errors.New("tx.buffer: No enough log data for read!")
-	} else {
-		copy(output, b.buffer[b.tail-len(output):b.tail])
-		b.tail -= len(output)
 	}
-	/* TODO: Need flush output updates here. */
+
+	copy(output, b.buffer[b.tail-len(output):b.tail])
+	Persist(unsafe.Pointer(&output[0]), len(output))
+	b.tail -= len(output)
 	return len(output), nil
 }
 

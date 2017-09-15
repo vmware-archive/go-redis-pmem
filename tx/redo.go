@@ -10,5 +10,5 @@ func UpdateRedo(dst unsafe.Pointer, src unsafe.Pointer, size uintptr) {
 	dstSlice := (*[LOGSIZE]byte)(dst)[:size:size]
 	srcSlice := (*[LOGSIZE]byte)(src)[:size:size]
 	copy(dstSlice, srcSlice)
-	FlushRange(dst, size)
+	Persist(dst, int(size))
 }

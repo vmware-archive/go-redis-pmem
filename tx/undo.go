@@ -65,10 +65,10 @@ func initUndo(data []byte) {
 }
 
 func setUndoHdr(tail int) {
-	/* TODO: Need a fence here. */
+	sfence()
 	undoHdr.tail = tail
-	/* TODO: Need to flush updates here. */
-	/* TODO: Need another fence here. */
+	Persist(unsafe.Pointer(undoHdr), int(unsafe.Sizeof(*undoHdr)))
+	sfence()
 }
 
 func LogUndo(data interface{}) error {
@@ -126,7 +126,7 @@ func commitUndo() error {
 		}
 
 		/* Flush change. */
-		// flush(undoEntry.offset, undoEntry.size)
+		Persist(unsafe.Pointer(undoEntry.offset+undoOff), undoEntry.size)
 
 		undoBuf.Rewind(undoEntry.size)
 	}
@@ -136,9 +136,9 @@ func commitUndo() error {
 			return errors.New("tx.undo: buffer not correctly parsed when commit!")
 		}
 		setUndoHdr(0) // discard all logs.
-	} /* else {
-		mfence()
-	} */
+	} else {
+		sfence()
+	}
 	return nil
 }
 
@@ -160,3 +160,16 @@ func rollbackUndo() error {
 	setUndoHdr(undoBuf.Tail())
 	return nil
 }
+
+func Persist(p unsafe.Pointer, s int) {
+	f := uintptr(p) &^ (CACHELINE - 1)
+	l := (uintptr(p) + uintptr(s) - 1) &^ (CACHELINE - 1)
+	for f <= l {
+		clflush(f)
+		f += CACHELINE
+	}
+}
+
+func sfence()
+
+func clflush(uintptr)

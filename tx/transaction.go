@@ -1,7 +1,8 @@
 package tx
 
 const (
-	LOGSIZE = 4 * 1024
+	LOGSIZE           = 4 * 1024
+	CACHELINE uintptr = 64
 )
 
 /*
