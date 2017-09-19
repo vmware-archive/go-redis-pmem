@@ -35,8 +35,7 @@ var (
 	undoBuf    logBuffer   // volatile wrapper for log buffer
 	undoEntry  entryHeader // volatile entry header
 	entrySlice []byte      // underlying raw byte slice of undoEntry
-	level      int         // nested tx level
-	nest       [10]int     // nested tx info
+	level      int         // tx level
 )
 
 func initUndo(data []byte) {
@@ -52,7 +51,6 @@ func initUndo(data []byte) {
 	}
 
 	/* 3. Rollback not committed transaction log. */
-	level = 1
 	err = rollbackUndo()
 	if err != nil {
 		log.Fatal(err)
@@ -107,43 +105,38 @@ func LogUndo(data interface{}) error {
 
 func beginUndo() error {
 	level += 1
-	if level > 10 {
-		return errors.New("tx.undo: reached maximum nested transaction level!")
-	}
-	nest[level-1] = undoBuf.Tail()
 	return nil
 }
 
 func commitUndo() error {
-	if level <= 0 {
+	if level == 0 {
 		return errors.New("tx.undo: no transaction to commit!")
 	}
-	/* Need to flush current value of logged areas. */
-	for undoBuf.Tail() > nest[level-1] {
-		_, err := undoBuf.Read(entrySlice)
-		if err != nil {
-			return err
+	level--
+	if level == 0 {
+		/* Need to flush current value of logged areas. */
+		for undoBuf.Tail() > 0 {
+			_, err := undoBuf.Read(entrySlice)
+			if err != nil {
+				return err
+			}
+
+			/* Flush change. */
+			Persist(unsafe.Pointer(undoEntry.offset+undoOff), undoEntry.size)
+
+			undoBuf.Rewind(undoEntry.size)
 		}
-
-		/* Flush change. */
-		Persist(unsafe.Pointer(undoEntry.offset+undoOff), undoEntry.size)
-
-		undoBuf.Rewind(undoEntry.size)
-	}
-	level -= 1
-	if level == 0 { // top level transaction committed
 		if undoBuf.Tail() != 0 {
 			return errors.New("tx.undo: buffer not correctly parsed when commit!")
 		}
 		setUndoHdr(0) // discard all logs.
-	} else {
-		sfence()
-	}
+	} 
 	return nil
 }
 
 func rollbackUndo() error {
-	for undoBuf.Tail() > nest[level-1] {
+	level = 0
+	for undoBuf.Tail() > 0 {
 		_, err := undoBuf.Read(entrySlice)
 		if err != nil {
 			return err
@@ -154,10 +147,10 @@ func rollbackUndo() error {
 			return err
 		}
 	}
-	if undoBuf.Tail() != nest[level-1] {
+	if undoBuf.Tail() != 0 {
 		return errors.New("tx.undo: buffer not correctly parsed when rollback!")
 	}
-	setUndoHdr(undoBuf.Tail())
+	setUndoHdr(0)
 	return nil
 }
 
