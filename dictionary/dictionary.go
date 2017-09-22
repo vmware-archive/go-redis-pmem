@@ -33,23 +33,23 @@ type (
 	}
 )
 
-func New() *dict {
+func New(undoTx tx.Transaction) *dict {
 	var (
 		d *dict
 		t []*entry
 		e *entry
 	)
 	// should be replaced with pNew(dict)
-	d = (*dict)(heap.Alloc(int(unsafe.Sizeof(*d))))
+	d = (*dict)(heap.Alloc(undoTx, int(unsafe.Sizeof(*d))))
 	// should be replaced with pMake([]entry, DictInitSize)
-	t = (*[DictInitSize]*entry)(heap.Alloc(int(unsafe.Sizeof(e)) * DictInitSize))[:DictInitSize:DictInitSize]
+	t = (*[DictInitSize]*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(e)) * DictInitSize))[:DictInitSize:DictInitSize]
 
-	tx.Begin()
-	tx.LogUndo(d)
+	undoTx.Begin()
+	undoTx.Log(d)
 	d.tables[0] = t
 	d.mask[0] = DictInitSize - 1
 	d.rehashIdx = -1
-	tx.Commit()
+	undoTx.Commit()
 	return d
 }
 
@@ -60,8 +60,8 @@ func (d *dict) hashKey(key string) int { // may implement fast hashing in asm
 	return h
 }
 
-func (d *dict) findKey(key string) (int, int, *entry, *entry) {
-	d.rehashStep()
+func (d *dict) findKey(undoTx tx.Transaction, key string) (int, int, *entry, *entry) {
+	d.rehashStep(undoTx)
 	h := d.hashKey(key)
 	var (
 		t, maxt, i int
@@ -87,63 +87,63 @@ func (d *dict) findKey(key string) (int, int, *entry, *entry) {
 }
 
 
-func (d *dict) Set(key, value string) {
-	t, i, _, e := d.findKey(key)
+func (d *dict) Set(undoTx tx.Transaction, key, value string) {
+	t, i, _, e := d.findKey(undoTx, key)
 
 	// copy volatile value into pmem heap
-	v := (*[1<<30]byte)(heap.Alloc(len(value)))[:len(value):len(value)]
+	v := (*[1<<30]byte)(heap.Alloc(undoTx, len(value)))[:len(value):len(value)]
 	copy(v, value)
 	tx.Persist(unsafe.Pointer(&v[0]), len(v)) // shadow update
 
-	tx.Begin()
+	undoTx.Begin()
 	if e != nil { // note that gc cannot recycle e.value before commit.
-		tx.LogUndo(&e.value)
+		undoTx.Log(&e.value)
 		e.value = v
 	} else {
-		k := (*[1<<30]byte)(heap.Alloc(len(key)))[:len(key):len(key)]
+		k := (*[1<<30]byte)(heap.Alloc(undoTx, len(key)))[:len(key):len(key)]
 		copy(k, key)
 		tx.Persist(unsafe.Pointer(&k[0]), len(k)) // shadow update
 
-		e2 := (*entry)(heap.Alloc(int(unsafe.Sizeof(*e))))
-		tx.LogUndo(e2)
+		e2 := (*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(*e))))
 		e2.key = k
 		e2.value = v
 		e2.next = d.tables[t][i]
-		tx.LogUndo(d.tables[t][i:i+1])
+		tx.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
+		undoTx.Log(d.tables[t][i:i+1])
 		d.tables[t][i] = e2
-		tx.LogUndo(d.used[t:])
+		undoTx.Log(d.used[t:])
 		d.used[t]++
 	}
-	tx.Commit()
-	d.expandIfNeeded()
+	undoTx.Commit()
+	d.expandIfNeeded(undoTx)
 }
 
-func (d *dict) Get(key string) string {
-	_, _, _, e := d.findKey(key)
+func (d *dict) Get(undoTx tx.Transaction, key string) string {
+	_, _, _, e := d.findKey(undoTx, key)
 	if e != nil {
 		return string(e.value)
 	}
 	return ""
 }
 
-func (d *dict) Del(key string) bool {
-	t, i, p, e := d.findKey(key)
+func (d *dict) Del(undoTx tx.Transaction, key string) bool {
+	t, i, p, e := d.findKey(undoTx, key)
 	deleted := false
-	tx.Begin()
+	undoTx.Begin()
 	if e != nil { // note that gc cannot recycle e before commit.
 		if p != nil {
-			tx.LogUndo(p)
+			undoTx.Log(p)
 			p.next = e.next
 		} else {
-			tx.LogUndo(d.tables[t][i:i+1])
+			undoTx.Log(d.tables[t][i:i+1])
 			d.tables[t][i] = e.next
 		}
-		tx.LogUndo(d.used[t:])
+		undoTx.Log(d.used[t:])
 		d.used[t]--
 		deleted = true
 	}
-	tx.Commit()
-	d.shrinkIfNeeded()
+	undoTx.Commit()
+	d.shrinkIfNeeded(undoTx)
 	return deleted
 }
 
@@ -151,14 +151,14 @@ func (d *dict) rehashing() bool {
 	return d.rehashIdx >= 0
 }
 
-func (d *dict) rehash(n int) bool {
+func (d *dict) rehash(undoTx tx.Transaction, n int) bool {
 	visit := n*10
 	if !d.rehashing() {
 		return false
 	}
 
-	tx.Begin()
-	tx.LogUndo(d)
+	undoTx.Begin()
+	undoTx.Log(d)
 	for n > 0 && d.used[0] > 0 {
 		e := d.tables[0][d.rehashIdx]
 		for e == nil {
@@ -173,15 +173,15 @@ func (d *dict) rehash(n int) bool {
 		for e != nil {			
 			next := e.next
 			i := d.hashKey(string(e.key)) & d.mask[1]
-			tx.LogUndo(e)
+			undoTx.Log(e)
 			e.next = d.tables[1][i]
-			tx.LogUndo(d.tables[1][i:i+1])
+			undoTx.Log(d.tables[1][i:i+1])
 			d.tables[1][i] = e
 			d.used[0]--
 			d.used[1]++
 			e = next
 		}
-		tx.LogUndo(d.tables[0][d.rehashIdx:d.rehashIdx+1])
+		undoTx.Log(d.tables[0][d.rehashIdx:d.rehashIdx+1])
 		d.tables[0][d.rehashIdx] = nil
 		d.rehashIdx++
 		n--
@@ -196,13 +196,13 @@ func (d *dict) rehash(n int) bool {
 		d.mask[1] = 0
 		d.rehashIdx = -1
 	}
-	tx.Commit()
+	undoTx.Commit()
 
 	return d.rehashIdx >= 0
 }
 
-func (d *dict) rehashStep() bool {
-	return d.rehash(1)
+func (d *dict) rehashStep(undoTx tx.Transaction) bool {
+	return d.rehash(undoTx, 1)
 }
 
 func (d *dict) nextPower(s int) int {
@@ -213,34 +213,34 @@ func (d *dict) nextPower(s int) int {
 	return i
 }
 
-func (d *dict) resize(s int) error {
+func (d *dict) resize(undoTx tx.Transaction, s int) error {
 	s = d.nextPower(s) 
 	if d.rehashing() {
 		return errors.New("dict.resize: expanding while rehashing!")
 	}
 	var e *entry
-	t := (*[1<<30]*entry)(heap.Alloc(int(unsafe.Sizeof(e)) * s))[:s:s]
-	tx.Begin()
-	tx.LogUndo(d)
+	t := (*[1<<30]*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(e)) * s))[:s:s]
+	undoTx.Begin()
+	undoTx.Log(d)
 	d.tables[1] = t
 	d.mask[1] = s - 1
 	d.rehashIdx = 0
-	tx.Commit()
+	undoTx.Commit()
 	return nil
 }
 
-func (d *dict) expandIfNeeded() {
+func (d *dict) expandIfNeeded(undoTx tx.Transaction) {
 	if !d.rehashing() {
 		if d.used[0] > len(d.tables[0]) * Ratio {
-			d.resize(d.used[0] * 2)
+			d.resize(undoTx, d.used[0] * 2)
 		}
 	}
 }
 
-func (d *dict) shrinkIfNeeded() {
+func (d *dict) shrinkIfNeeded(undoTx tx.Transaction) {
 	if !d.rehashing() {
 		if len(d.tables[0]) > DictInitSize && d.used[0] < len(d.tables[0]) / Ratio {
-			d.resize(d.used[0])
+			d.resize(undoTx, d.used[0])
 		}
 	}
 }

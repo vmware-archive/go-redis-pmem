@@ -22,13 +22,13 @@ var (
 	_data   []byte
 )
 
-func Init(data []byte, size int) {
+func Init(t tx.Transaction, data []byte, size int) {
 	_data = data
 	_header = (*heapHeader)(unsafe.Pointer(&_data[0]))
 	hdSize := int(unsafe.Sizeof(*_header))
 
-	tx.Begin()
-	tx.LogUndo(_header)
+	t.Begin()
+	t.Log(_header)
 	if _header.end == 0 {
 		// first time initialization
 		_header.end = size
@@ -38,18 +38,18 @@ func Init(data []byte, size int) {
 			log.Fatal("Heap size does not match!")
 		}
 	}
-	tx.Commit()
+	t.Commit()
 }
 
-func Alloc(size int) unsafe.Pointer {
+func Alloc(t tx.Transaction, size int) unsafe.Pointer {
 	offset := uintptr(_header.offset)
-	tx.Begin()
-	tx.LogUndo(_header)
+	t.Begin()
+	t.Log(_header)
 	if _header.offset+size < _header.end {
 		_header.offset += size
 	} else {
 		log.Fatal("Run out of heap!")
 	}
-	tx.Commit()
+	t.Commit()
 	return unsafe.Pointer(&_data[offset])
 }

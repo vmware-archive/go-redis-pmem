@@ -59,13 +59,14 @@ func Init(pathname string, size, uuid int) {
 	hdSize := int(unsafe.Sizeof(*_region))
 
 	// (3) init log and heap
-	tx.Init(fdata[hdSize:(hdSize+tx.LOGSIZE)], size-hdSize)
+	tx.Init(fdata[hdSize:(hdSize+tx.LOGSIZE)])
+	undoTx := tx.NewUndo() 
 	heapOffset := hdSize + tx.LOGSIZE
-	heap.Init(fdata[heapOffset:], size-heapOffset)
+	heap.Init(undoTx, fdata[heapOffset:], size-heapOffset)
 
 	// (4) update pmem region header
-	tx.Begin()
-	tx.LogUndo(_region)
+	undoTx.Begin()
+	undoTx.Log(_region)
 	if _region.uuid == 0 {
 		log.Println("Initializing empty region.")
 		_region.magic = MAGIC
@@ -86,14 +87,15 @@ func Init(pathname string, size, uuid int) {
 	} else {
 		log.Fatal("Region uuid does not match!")
 	}
-	tx.Commit()
+	undoTx.Commit()
+	tx.Release(undoTx)
 }
 
-func SetRoot(ptr unsafe.Pointer) {
-	tx.Begin()
-	tx.LogUndo(&_region.rootOffset)
+func SetRoot(t tx.Transaction, ptr unsafe.Pointer) {
+	t.Begin()
+	t.Log(&_region.rootOffset)
 	_region.rootOffset = uintptr(ptr) - _region.offset
-	tx.Commit()
+	t.Commit()
 }
 
 func GetRoot() unsafe.Pointer {

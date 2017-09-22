@@ -1,35 +1,52 @@
 package tx
 
+import (
+	"unsafe"
+	"log"
+)
+
 const (
-	LOGSIZE           = 4 * 1024
+	LOGSIZE   int     = 4 * 1024
 	CACHELINE uintptr = 64
 )
 
-/*
- * basic info of current transcation and
- * the inital log area.
- * currently just place holder
- */
-type txHeader struct {
-	log [LOGSIZE]byte
+// transaction interface
+type Transaction interface {
+	Begin() error
+	Log(interface{}) error
+	Commit() error
+	Abort() error
 }
 
-func Init(data []byte, size int) {
-	/* currently only support simple undo logging. */
-	initUndo(data[:LOGSIZE])
+func Init(logArea []byte) {
+	// currently only support simple undo logging transaction.
+	InitUndo(logArea)
 }
 
-/* begin a transaction */
-func Begin() {
-	beginUndo()
+func NewUndo() Transaction {
+	return newUndo()
 }
 
-/* commit a transaction */
-func Commit() {
-	commitUndo()
+func Release(t Transaction) {
+	// currently only support simple undo logging transaction.
+	tt, ok := t.(*undoTx)
+	if ok {
+		releaseUndo(tt)
+	} else {
+		log.Panic("Releasing unsupported transaction!")
+	}
+} 
+
+// directly persist pmem range
+func Persist(p unsafe.Pointer, s int) {
+	f := uintptr(p) &^ (CACHELINE - 1)
+	l := (uintptr(p) + uintptr(s) - 1) &^ (CACHELINE - 1)
+	for f <= l {
+		//clflush(f)
+		f += CACHELINE
+	}
 }
 
-/* abort a transaction */
-func Abort() {
-	rollbackUndo()
-}
+func sfence()
+
+func clflush(uintptr)

@@ -27,50 +27,85 @@ type (
 		offset uintptr
 		size   int
 	}
+
+	undoTx struct {
+		id         int         // transaction id
+		undoHdr    *undoHeader // transaction header
+		undoBuf    logBuffer   // volatile wrapper for log buffer
+		level      int         // tx level
+		undoEntry  entryHeader // volatile entry header
+	    entrySlice []byte      // underlying raw byte slice of undoEntry
+	}
+)
+
+const (
+	max int = 1    // currently only support one outstanding transaction
 )
 
 var (
+	pool       []*undoTx
 	undoOff    uintptr     // offset of undo area
-	undoHdr    *undoHeader // transaction header
-	undoBuf    logBuffer   // volatile wrapper for log buffer
-	undoEntry  entryHeader // volatile entry header
-	entrySlice []byte      // underlying raw byte slice of undoEntry
-	level      int         // tx level
 )
 
-func initUndo(data []byte) {
-	/* 1. Get offset and header. */
-	undoOff = uintptr(unsafe.Pointer(&data[0]))
-	undoHdr = (*undoHeader)(unsafe.Pointer(&data[0]))
+func initUndo(id int, logArea []byte) *undoTx{
+	t := new(undoTx)
+	t.undoHdr = (*undoHeader)(unsafe.Pointer(&logArea[0]))
 
-	/* 2. Init buffer. */
 	var err error
-	undoBuf, err = initLinearUndoBuffer(data[unsafe.Sizeof(*undoHdr):], undoHdr.tail)
+	t.undoBuf, err = initLinearUndoBuffer(logArea[unsafe.Sizeof(*t.undoHdr):], t.undoHdr.tail)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	/* 3. Rollback not committed transaction log. */
-	err = rollbackUndo()
+	err = t.Abort()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	/* 4. Init byte slice of volatile entryHeader (merely for ease of logging) */
-	ptr := unsafe.Pointer(&undoEntry)
-	size := unsafe.Sizeof(undoEntry)
-	entrySlice = (*[LOGSIZE]byte)(ptr)[:size:size]
+	ptr := unsafe.Pointer(&t.undoEntry)
+	size := unsafe.Sizeof(t.undoEntry)
+	t.entrySlice = (*[LOGSIZE]byte)(ptr)[:size:size]
+
+	return t
 }
 
-func setUndoHdr(tail int) {
+// currently actually only support single thread and single tx
+func InitUndo(logArea []byte) {
+	// init global variables
+	undoOff = uintptr(unsafe.Pointer(&logArea[0]))
+
+	// init transaction pool
+	pool = make([]*undoTx, max)
+	for i, _ := range pool {
+		begin := len(logArea)/max*i
+		end := len(logArea)/max*(i+1)
+		pool[i] = initUndo(i, logArea[begin:end])
+	}
+}
+
+func newUndo() *undoTx {
+	var t *undoTx = nil
+	if len(pool) > 0 {
+		t = pool[len(pool) - 1]
+		pool = pool[:len(pool) - 1]
+	}
+	return t
+}
+
+func releaseUndo(t *undoTx) {
+	t.Abort()
+	pool= append(pool, t)
+}
+
+func (t *undoTx) setUndoHdr(tail int) {
 	sfence()
-	undoHdr.tail = tail
-	Persist(unsafe.Pointer(undoHdr), int(unsafe.Sizeof(*undoHdr)))
+	t.undoHdr.tail = tail  // atomic update
+	Persist(unsafe.Pointer(t.undoHdr), int(unsafe.Sizeof(*t.undoHdr)))
 	sfence()
 }
 
-func LogUndo(data interface{}) error {
-	/* 1. Check data type, get pointer and size of data. */
+func (t *undoTx) Log(data interface{}) error {
+	// Check data type, get pointer and size of data.
 	v := reflect.ValueOf(data)
 	bytes := 0
 	switch kind := v.Kind(); kind {
@@ -85,84 +120,71 @@ func LogUndo(data interface{}) error {
 	}
 	ptr := unsafe.Pointer(v.Pointer())
 
-	/* 2. Append data to undo log buffer. */
-	_, err := undoBuf.Write((*[LOGSIZE]byte)(ptr)[:bytes:bytes])
+	// Append data to undo log buffer. 
+	_, err := t.undoBuf.Write((*[LOGSIZE]byte)(ptr)[:bytes:bytes])
 	if err != nil {
 		return err
 	}
-	/* 3. Append log header.*/
-	undoEntry.offset = v.Pointer() - undoOff
-	undoEntry.size = bytes
-	_, err = undoBuf.Write(entrySlice)
+	// Append log header.
+	t.undoEntry.offset = v.Pointer() - undoOff
+	t.undoEntry.size = bytes
+	_, err = t.undoBuf.Write(t.entrySlice)
 	if err != nil {
 		return err
 	}
 
-	/* 4. Update log offset in header. Int update should be atomic. */
-	setUndoHdr(undoBuf.Tail())
+	// Update log offset in header.
+	t.setUndoHdr(t.undoBuf.Tail())
 	return nil
 }
 
-func beginUndo() error {
-	level += 1
+func (t *undoTx) Begin() error {
+	t.level += 1
 	return nil
 }
 
-func commitUndo() error {
-	if level == 0 {
+func (t *undoTx) Commit() error {
+	if t.level == 0 {
 		return errors.New("tx.undo: no transaction to commit!")
 	}
-	level--
-	if level == 0 {
+	t.level--
+	if t.level == 0 {
 		/* Need to flush current value of logged areas. */
-		for undoBuf.Tail() > 0 {
-			_, err := undoBuf.Read(entrySlice)
+		for t.undoBuf.Tail() > 0 {
+			_, err := t.undoBuf.Read(t.entrySlice)
 			if err != nil {
 				return err
 			}
 
 			/* Flush change. */
-			Persist(unsafe.Pointer(undoEntry.offset+undoOff), undoEntry.size)
+			Persist(unsafe.Pointer(t.undoEntry.offset+undoOff), t.undoEntry.size)
 
-			undoBuf.Rewind(undoEntry.size)
+			t.undoBuf.Rewind(t.undoEntry.size)
 		}
-		if undoBuf.Tail() != 0 {
+		if t.undoBuf.Tail() != 0 {
 			return errors.New("tx.undo: buffer not correctly parsed when commit!")
 		}
-		setUndoHdr(0) // discard all logs.
+		t.setUndoHdr(0) // discard all logs.
 	} 
 	return nil
 }
 
-func rollbackUndo() error {
-	level = 0
-	for undoBuf.Tail() > 0 {
-		_, err := undoBuf.Read(entrySlice)
+func (t *undoTx) Abort() error {
+	t.level = 0
+	for t.undoBuf.Tail() > 0 {
+		_, err := t.undoBuf.Read(t.entrySlice)
 		if err != nil {
 			return err
 		}
-		ptr := unsafe.Pointer(undoOff + undoEntry.offset)
-		_, err = undoBuf.Read((*[LOGSIZE]byte)(ptr)[:undoEntry.size:undoEntry.size])
+		ptr := unsafe.Pointer(undoOff + t.undoEntry.offset)
+		_, err = t.undoBuf.Read((*[LOGSIZE]byte)(ptr)[:t.undoEntry.size:t.undoEntry.size])
 		if err != nil {
 			return err
 		}
 	}
-	if undoBuf.Tail() != 0 {
+	if t.undoBuf.Tail() != 0 {
 		return errors.New("tx.undo: buffer not correctly parsed when rollback!")
 	}
-	setUndoHdr(0)
+	t.setUndoHdr(0)
 	return nil
 }
-
-func Persist(p unsafe.Pointer, s int) {
-	f := uintptr(p) &^ (CACHELINE - 1)
-	l := (uintptr(p) + uintptr(s) - 1) &^ (CACHELINE - 1)
-	for f <= l {
-		clflush(f)
-		f += CACHELINE
-	}
-}
-
-func sfence()
-
-func clflush(uintptr)
