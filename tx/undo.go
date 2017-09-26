@@ -100,7 +100,8 @@ func releaseUndo(t *undoTx) {
 func (t *undoTx) setUndoHdr(tail int) {
 	sfence()
 	t.undoHdr.tail = tail  // atomic update
-	Persist(unsafe.Pointer(t.undoHdr), int(unsafe.Sizeof(*t.undoHdr)))
+	//Persist(unsafe.Pointer(t.undoHdr), int(unsafe.Sizeof(*t.undoHdr)))
+	clflush(unsafe.Pointer(t.undoHdr))
 	sfence()
 }
 

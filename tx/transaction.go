@@ -38,15 +38,8 @@ func Release(t Transaction) {
 } 
 
 // directly persist pmem range
-func Persist(p unsafe.Pointer, s int) {
-	f := uintptr(p) &^ (CACHELINE - 1)
-	l := (uintptr(p) + uintptr(s) - 1) &^ (CACHELINE - 1)
-	for f <= l {
-		//clflush(f)
-		f += CACHELINE
-	}
-}
+func Persist(p unsafe.Pointer, s int)
 
 func sfence()
 
-func clflush(uintptr)
+func clflush(unsafe.Pointer)
