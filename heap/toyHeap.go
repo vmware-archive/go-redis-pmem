@@ -8,7 +8,7 @@ package heap
 
 import (
 	"log"
-	"pmem/tx"
+	"pmem/transaction"
 	"unsafe"
 )
 
@@ -22,7 +22,7 @@ var (
 	_data   []byte
 )
 
-func Init(t tx.Transaction, data []byte, size int) {
+func Init(t transaction.TX, data []byte, size int) {
 	_data = data
 	_header = (*heapHeader)(unsafe.Pointer(&_data[0]))
 	hdSize := int(unsafe.Sizeof(*_header))
@@ -41,7 +41,7 @@ func Init(t tx.Transaction, data []byte, size int) {
 	t.Commit()
 }
 
-func Alloc(t tx.Transaction, size int) unsafe.Pointer {
+func Alloc(t transaction.TX, size int) unsafe.Pointer {
 	offset := uintptr(_header.offset)
 	t.Begin()
 	t.Log(_header)

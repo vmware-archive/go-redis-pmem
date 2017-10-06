@@ -1,4 +1,4 @@
-package tx
+package transaction
 
 import (
 	"fmt"
@@ -20,7 +20,7 @@ var (
 	s2     = basic{2, nil, slice2}
 )
 
-func setup() Transaction {
+func setup() TX {
 	Init(make([]byte, LOGSIZE))
 	return NewUndo()
 }

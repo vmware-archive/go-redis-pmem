@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"pmem/heap"
 	"pmem/region"
-	"pmem/tx"
+	"pmem/transaction"
 	"unsafe"
 )
 
@@ -18,7 +18,7 @@ type List struct {
 	len  int
 }
 
-func (l *List) Insert(t tx.Transaction, key int) {
+func (l *List) Insert(t transaction.TX, key int) {
 	// put allocation outside tx as we do not support nested transaction yet.
 	var node *Node
 	node = (*Node)(heap.Alloc(t, int(unsafe.Sizeof(*node))))
@@ -43,7 +43,7 @@ func (l *List) Show() {
 	fmt.Print("nil\n")
 }
 
-func (l *List) Swizzle(t tx.Transaction) {
+func (l *List) Swizzle(t transaction.TX) {
 	// fmt.Println("Swizzle list:", l)
 	t.Begin()
 	t.Log(l)
@@ -62,7 +62,7 @@ func main() {
 	region.Init("pmem_toyList_example", 8*1024, 11111)
 	var l *List
 	lptr := region.GetRoot()
-	t := tx.NewUndo()
+	t := transaction.NewUndo()
 	if lptr == nil {
 		// no list created yet
 		fmt.Println("Create an empty list in pmem.")
@@ -76,5 +76,5 @@ func main() {
 		l.Insert(t, l.len)
 		l.Show()
 	}
-	tx.Release(t)
+	transaction.Release(t)
 }

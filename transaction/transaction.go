@@ -1,4 +1,4 @@
-package tx
+package transaction
 
 import (
 	"unsafe"
@@ -11,7 +11,7 @@ const (
 )
 
 // transaction interface
-type Transaction interface {
+type TX interface {
 	Begin() error
 	Log(interface{}) error
 	Commit() error
@@ -23,15 +23,15 @@ func Init(logArea []byte) {
 	InitUndo(logArea)
 }
 
-func NewUndo() Transaction {
+func NewUndo() TX {
 	return newUndo()
 }
 
-func Release(t Transaction) {
+func Release(t TX) {
 	// currently only support simple undo logging transaction.
-	tt, ok := t.(*undoTx)
+	u, ok := t.(*undoTx)
 	if ok {
-		releaseUndo(tt)
+		releaseUndo(u)
 	} else {
 		log.Panic("Releasing unsupported transaction!")
 	}

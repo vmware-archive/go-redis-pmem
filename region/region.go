@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 	"pmem/heap"
-	"pmem/tx"
+	"pmem/transaction"
 	"syscall"
 	"unsafe"
 )
@@ -59,9 +59,9 @@ func Init(pathname string, size, uuid int) {
 	hdSize := int(unsafe.Sizeof(*_region))
 
 	// (3) init log and heap
-	tx.Init(fdata[hdSize:(hdSize+tx.LOGSIZE)])
-	undoTx := tx.NewUndo() 
-	heapOffset := hdSize + tx.LOGSIZE
+	transaction.Init(fdata[hdSize:(hdSize+transaction.LOGSIZE)])
+	undoTx := transaction.NewUndo() 
+	heapOffset := hdSize + transaction.LOGSIZE
 	heap.Init(undoTx, fdata[heapOffset:], size-heapOffset)
 
 	// (4) update pmem region header
@@ -88,10 +88,10 @@ func Init(pathname string, size, uuid int) {
 		log.Fatal("Region uuid does not match!")
 	}
 	undoTx.Commit()
-	tx.Release(undoTx)
+	transaction.Release(undoTx)
 }
 
-func SetRoot(t tx.Transaction, ptr unsafe.Pointer) {
+func SetRoot(t transaction.TX, ptr unsafe.Pointer) {
 	t.Begin()
 	t.Log(&_region.rootOffset)
 	_region.rootOffset = uintptr(ptr) - _region.offset

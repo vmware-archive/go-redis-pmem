@@ -1,7 +1,7 @@
 package redis
 
 import (
-	"pmem/tx"
+	"pmem/transaction"
 	"pmem/heap"
 	"unsafe"
 	"errors"
@@ -33,7 +33,7 @@ type (
 	}
 )
 
-func New(undoTx tx.Transaction) *dict {
+func New(undoTx transaction.TX) *dict {
 	var (
 		d *dict
 		t []*entry
@@ -60,7 +60,7 @@ func (d *dict) hashKey(key string) int { // may implement fast hashing in asm
 	return h
 }
 
-func (d *dict) findKey(undoTx tx.Transaction, key string) (int, int, *entry, *entry) {
+func (d *dict) findKey(undoTx transaction.TX, key string) (int, int, *entry, *entry) {
 	d.rehashStep(undoTx)
 	h := d.hashKey(key)
 	var (
@@ -87,13 +87,13 @@ func (d *dict) findKey(undoTx tx.Transaction, key string) (int, int, *entry, *en
 }
 
 
-func (d *dict) Set(undoTx tx.Transaction, key, value string) {
+func (d *dict) Set(undoTx transaction.TX, key, value string) {
 	t, i, _, e := d.findKey(undoTx, key)
 
 	// copy volatile value into pmem heap
 	v := (*[1<<30]byte)(heap.Alloc(undoTx, len(value)))[:len(value):len(value)]
 	copy(v, value)
-	tx.Persist(unsafe.Pointer(&v[0]), len(v)) // shadow update
+	transaction.Persist(unsafe.Pointer(&v[0]), len(v)) // shadow update
 
 	undoTx.Begin()
 	if e != nil { // note that gc cannot recycle e.value before commit.
@@ -102,13 +102,13 @@ func (d *dict) Set(undoTx tx.Transaction, key, value string) {
 	} else {
 		k := (*[1<<30]byte)(heap.Alloc(undoTx, len(key)))[:len(key):len(key)]
 		copy(k, key)
-		tx.Persist(unsafe.Pointer(&k[0]), len(k)) // shadow update
+		transaction.Persist(unsafe.Pointer(&k[0]), len(k)) // shadow update
 
 		e2 := (*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(*e))))
 		e2.key = k
 		e2.value = v
 		e2.next = d.tables[t][i]
-		tx.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
+		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
 		undoTx.Log(d.tables[t][i:i+1])
 		d.tables[t][i] = e2
 		undoTx.Log(d.used[t:])
@@ -118,7 +118,7 @@ func (d *dict) Set(undoTx tx.Transaction, key, value string) {
 	d.expandIfNeeded(undoTx)
 }
 
-func (d *dict) Get(undoTx tx.Transaction, key string) string {
+func (d *dict) Get(undoTx transaction.TX, key string) string {
 	_, _, _, e := d.findKey(undoTx, key)
 	if e != nil {
 		return string(e.value)
@@ -126,7 +126,7 @@ func (d *dict) Get(undoTx tx.Transaction, key string) string {
 	return ""
 }
 
-func (d *dict) Del(undoTx tx.Transaction, key string) bool {
+func (d *dict) Del(undoTx transaction.TX, key string) bool {
 	t, i, p, e := d.findKey(undoTx, key)
 	deleted := false
 	undoTx.Begin()
@@ -151,7 +151,7 @@ func (d *dict) rehashing() bool {
 	return d.rehashIdx >= 0
 }
 
-func (d *dict) rehash(undoTx tx.Transaction, n int) bool {
+func (d *dict) rehash(undoTx transaction.TX, n int) bool {
 	visit := n*10
 	if !d.rehashing() {
 		return false
@@ -201,7 +201,7 @@ func (d *dict) rehash(undoTx tx.Transaction, n int) bool {
 	return d.rehashIdx >= 0
 }
 
-func (d *dict) rehashStep(undoTx tx.Transaction) bool {
+func (d *dict) rehashStep(undoTx transaction.TX) bool {
 	return d.rehash(undoTx, 1)
 }
 
@@ -213,7 +213,7 @@ func (d *dict) nextPower(s int) int {
 	return i
 }
 
-func (d *dict) resize(undoTx tx.Transaction, s int) error {
+func (d *dict) resize(undoTx transaction.TX, s int) error {
 	s = d.nextPower(s) 
 	if d.rehashing() {
 		return errors.New("dict.resize: expanding while rehashing!")
@@ -229,7 +229,7 @@ func (d *dict) resize(undoTx tx.Transaction, s int) error {
 	return nil
 }
 
-func (d *dict) expandIfNeeded(undoTx tx.Transaction) {
+func (d *dict) expandIfNeeded(undoTx transaction.TX) {
 	if !d.rehashing() {
 		if d.used[0] > len(d.tables[0]) * Ratio {
 			d.resize(undoTx, d.used[0] * 2)
@@ -237,7 +237,7 @@ func (d *dict) expandIfNeeded(undoTx tx.Transaction) {
 	}
 }
 
-func (d *dict) shrinkIfNeeded(undoTx tx.Transaction) {
+func (d *dict) shrinkIfNeeded(undoTx transaction.TX) {
 	if !d.rehashing() {
 		if len(d.tables[0]) > DictInitSize && d.used[0] < len(d.tables[0]) / Ratio {
 			d.resize(undoTx, d.used[0])

@@ -2,7 +2,7 @@ package redis
 
 import (
 	"testing"
-	"pmem/tx"
+	"pmem/transaction"
 	"pmem/heap"
 	"fmt"
 	"strconv"
@@ -33,11 +33,11 @@ func TestDict(t *testing.T) {
 	}
 }
 
-func setup() tx.Transaction {
-	logSlice := make([]byte, tx.LOGSIZE)
+func setup() transaction.TX {
+	logSlice := make([]byte, transaction.LOGSIZE)
 	heapSlice := make([]byte, 100000000)
-	tx.Init(logSlice)
-	undoTx := tx.NewUndo()
+	transaction.Init(logSlice)
+	undoTx := transaction.NewUndo()
 	heap.Init(undoTx, heapSlice, 100000000)
 	d = New(undoTx)
 	return undoTx
