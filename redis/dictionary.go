@@ -1,4 +1,4 @@
-package dictionary
+package redis
 
 import (
 	"pmem/tx"
