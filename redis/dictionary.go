@@ -33,7 +33,7 @@ type (
 	}
 )
 
-func New(undoTx transaction.TX) *dict {
+func NewDict(undoTx transaction.TX) *dict {
 	var (
 		d *dict
 		t []*entry
@@ -86,6 +86,9 @@ func (d *dict) findKey(undoTx transaction.TX, key string) (int, int, *entry, *en
 	return maxt, i, pre, curr
 }
 
+func (d *dict) Used() int {
+	return d.used[0] + d.used[1]
+}
 
 func (d *dict) Set(undoTx transaction.TX, key, value string) {
 	t, i, _, e := d.findKey(undoTx, key)

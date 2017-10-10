@@ -2,13 +2,28 @@ package redis
 
 import (
 	"testing"
+	"runtime/debug"
 	"pmem/transaction"
 	"pmem/heap"
 	"fmt"
 	"strconv"
+	"time"
 )
 
 var d *dict
+
+func TestServer(t *testing.T) {
+	s := new(server)
+	go s.Start()
+	time.Sleep(time.Duration(30)*time.Second) // give sometime to run memtier against server.
+	conn := getClient()
+	conn.Write([]byte("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
+	time.Sleep(time.Duration(3)*time.Second)
+	undoTx := transaction.NewUndo()
+	assertEqual(t,"bar", s.db.Get(undoTx, "foo"))
+	transaction.Release(undoTx)
+}
+
 
 func TestDict(t *testing.T) {
 	undoTx := setup()
@@ -39,12 +54,13 @@ func setup() transaction.TX {
 	transaction.Init(logSlice)
 	undoTx := transaction.NewUndo()
 	heap.Init(undoTx, heapSlice, 100000000)
-	d = New(undoTx)
+	d = NewDict(undoTx)
 	return undoTx
 }
 
 func assertEqual(t *testing.T, a interface{}, b interface{}) {
 	if a != b {
+		debug.PrintStack()
 		t.Fatal(fmt.Sprintf("%v != %v", a, b))
 	}
 }
