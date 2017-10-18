@@ -3,6 +3,8 @@ package transaction
 import (
 	"fmt"
 	"testing"
+	"sync"
+	"time"
 )
 
 type basic struct {
@@ -124,6 +126,32 @@ func TestLog(t *testing.T) {
 	assertEqual(t, slice1[9], 0)
 	assertEqual(t, slice1[10], 10)
 	assertEqual(t, slice1[99], 0)
+	Release(undoTx)
+}
+
+func TestConcurrentLog(t *testing.T) {
+	m1 := new(sync.RWMutex)
+	m2 := new(sync.RWMutex)
+	Init(make([]byte, LOGSIZE))
+	fmt.Println("Before:", s1.i, s2.i)
+	for i:=0; i<100; i++ {
+		go func(i int) {
+			time.Sleep(time.Duration(1)*time.Second)
+			undo := NewUndo()
+			undo.Begin()
+			undo.WLock(m1)
+			undo.Log(&s1)
+			s1.i = i
+			undo.WLock(m2)
+			undo.Log(&s2)
+			s2.i = i
+			//undo.Abort()
+			undo.Commit()
+			Release(undo)
+		}(i)
+	}
+	time.Sleep(time.Duration(3)*time.Second)
+	assertEqual(t, s1.i, s2.i)
 }
 
 func BenchmarkLogInt(b *testing.B) {

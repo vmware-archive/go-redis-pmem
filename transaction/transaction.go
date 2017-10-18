@@ -3,36 +3,39 @@ package transaction
 import (
 	"unsafe"
 	"log"
+	"sync"
 )
 
 const (
-	LOGSIZE   int     = 4 * 1024
+	LOGSIZE   int     = 128 * 1024
 	CACHELINE uintptr = 64
 )
 
 // transaction interface
-type TX interface {
-	Begin() error
-	Log(interface{}) error
-	Commit() error
-	Abort() error
-}
+type (
+	TX interface {
+		Begin() error
+		Log(interface{}) error
+		Commit() error
+		Abort() error
+		RLock(*sync.RWMutex)
+		WLock(*sync.RWMutex)
+	}
+)
 
 func Init(logArea []byte) {
 	// currently only support simple undo logging transaction.
 	InitUndo(logArea)
 }
 
-func NewUndo() TX {
-	return newUndo()
-}
-
 func Release(t TX) {
 	// currently only support simple undo logging transaction.
-	u, ok := t.(*undoTx)
-	if ok {
-		releaseUndo(u)
-	} else {
+	switch v := t.(type) {
+	case *undoTx:
+		releaseUndo(v)
+	case *readonlyTx:
+		releaseReadonly(v)
+	default:
 		log.Panic("Releasing unsupported transaction!")
 	}
 } 

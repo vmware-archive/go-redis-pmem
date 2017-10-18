@@ -4,34 +4,44 @@ import (
 	"os"
 	"fmt"
 	"net"
+	"time"
+	"bufio"
 	"strconv"
 	"pmem/region"
 	"pmem/transaction"
 )
 
 const (
-	DATASIZE int 	= 10000000
+	DATASIZE int 	= 500000000
 	UUID 	 int 	= 9524
 	PORT	 string = ":6379"
+)
+
+var (
+	crlf		[]byte = []byte("\r\n")
+	ok          []byte = []byte("+OK\r\n")
+	nullbulk	[]byte = []byte("$-1\r\n")
+	bulkhead	[]byte = []byte("$")
+
+	foo			[]byte = []byte("foo")
 )
 
 type (
 	server struct {
 		db    		*dict
-		token	 	chan bool
 	}
 
 	client struct {
 		s 				*server
 		db       		*dict
-		conn     		net.Conn
+		conn     		*net.TCPConn
+		rBuffer			*bufio.Reader
+		wBuffer 		*bufio.Writer
 		argc	 		int
 		argv	 		[][]byte
 		querybuf 		[]byte
-		reply	 		[]byte
 		multibulklen 	int
 		bulklen	 		int
-		reppos			int
 	}
 )
 
@@ -40,8 +50,6 @@ func (s *server) init(path string) {
 	tx := transaction.NewUndo()
 	s.db = NewDict(tx)
 	transaction.Release(tx)
-	s.token = make(chan bool, 1) // used as mutex to protect db
-	s.token <- true
 }
 
 func (s *server) Start() {
@@ -55,8 +63,10 @@ func (s *server) Start() {
 	listener, err := net.ListenTCP("tcp", tcpAddr)
 	fatalError(err)
 
+	go s.Cron()
+
 	for {
-        conn, err := listener.Accept()
+        conn, err := listener.AcceptTCP()
         if err != nil {
             continue
         }
@@ -65,14 +75,26 @@ func (s *server) Start() {
     }
 }
 
-func (s *server) handleClient(conn net.Conn) {
-	defer conn.Close()
-	c := s.newClient(conn)
-	c.processInput()
+func (s *server) Cron() {
+	for {
+		time.Sleep(10 * time.Millisecond)
+		undoTx := transaction.NewUndo()
+		s.db.ResizeIfNeeded(undoTx)
+		s.db.Rehash(undoTx, 10)
+		transaction.Release(undoTx)
+	}
 }
 
-func (s * server) newClient(conn net.Conn) *client {
-	return &client{s, s.db, conn, 0, nil, make([]byte, 1024), make([]byte, 1024), 0, -1, 0}
+func (s *server) handleClient(conn *net.TCPConn) {
+	// defer conn.Close()
+	c := s.newClient(conn)
+	c.conn.SetNoDelay(false) // try batching packet to improve tp.
+	go c.processInput()
+	//go c.processOutput()
+}
+
+func (s * server) newClient(conn *net.TCPConn) *client {
+	return &client{s, s.db, conn, bufio.NewReader(conn), bufio.NewWriter(conn), 0, nil, make([]byte, 1024), 0, -1}
 }
 
 // Process input buffer and call command.
@@ -82,26 +104,25 @@ func (c *client) processInput() {
 	finish := false   // finish processing a query
 	for {
 		n, err := c.conn.Read(c.querybuf[pos:])
-		if err != nil && curr >= pos {
+		if err != nil {
 			return
 		}
+
+		pos += n
 		//fmt.Println("Input buffer ", pos, n, len(c.querybuf), curr)
 		//fmt.Printf("%q\n", string(c.querybuf))
 
 		// process multi bulk buffer
-		curr, finish = c.processMultibulkBuffer(curr, pos + n)
-		if finish {
+		curr, finish = c.processMultibulkBuffer(curr, pos)
+		for finish {
 			// Get one full query
 			if c.argc > 0 {
-				//c.printArgs()
-				<- c.s.token
 				c.processCommand()
-				c.s.token <- true
 			}
 			c.reset()
+			curr, finish = c.processMultibulkBuffer(curr, pos)
 		}
 		
-		pos += n
 		// rewind query buffer if full.
 		if pos == len(c.querybuf) {
 			copy(c.querybuf, c.querybuf[curr:])
@@ -168,59 +189,61 @@ func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 	return begin, true
 }
 
-func (c *client) printArgs() {
-	fmt.Println("Client has", c.argc, "arguments:")
-	for _,q := range c.argv {
+func printArgs(argv [][]byte) {
+	fmt.Println("Client has", len(argv), "arguments:")
+	for _,q := range argv {
 		fmt.Println(string(q))
 	}
 }
 
 func (c *client) reset() {
 	c.argc = 0
-	c.argv = nil
+	c.argv = c.argv[0:0]
 	c.multibulklen = 0
 	c.bulklen = -1
 }
 
+// currenlty only support simple SET/GET that is used by memtierbenchmark
 func (c *client) processCommand() {
-	if string(c.argv[0]) == "SET" && c.argc == 3 {
+	if string(c.argv[0]) == "SET" && len(c.argv) == 3 {
 		tx := transaction.NewUndo()
 		//fmt.Println("Set", string(c.argv[1]), string(c.argv[2]))
-		c.db.Set(tx, string(c.argv[1]), string(c.argv[2]))
+		c.db.Set(tx, c.argv[1], c.argv[2])
 		transaction.Release(tx)
-		c.addReply("+OK\r\n")
-	} else if string(c.argv[0]) == "GET" && c.argc == 2 {
-		tx := transaction.NewUndo()
-		v := c.db.Get(tx, string(c.argv[1]))
+		c.addReply(ok)
+	} else if string(c.argv[0]) == "GET" && len(c.argv) == 2 {
+		tx := transaction.NewReadonly()
+		v := c.db.Get(tx, c.argv[1])
 		//fmt.Println("Get", string(c.argv[1]), v)
 		transaction.Release(tx)
-		if v == "" {
-			c.addReply("$-1\r\n")
+		if len(v) == 0 {
+			c.addReply(nullbulk)
+			//c.addReplyBulk(foo)
 		} else {
 			c.addReplyBulk(v)
 		}
 	} else {
 		fmt.Println("Command not supported!")
-		c.printArgs()
+		printArgs(c.argv)
 	}
 }
 
-func (c *client) addReply(s string) {
-	copy(c.reply[c.reppos:], s)
-	c.reppos += len(s)
-	//fmt.Println("Reply buffer ", c.reppos)
-	//fmt.Printf("%q\n", string(c.reply))
-	n, err := c.conn.Write(c.reply[:c.reppos])
-	fatalError(err)
-	if n > 0 {
-		copy(c.reply, c.reply[n:c.reppos])
-		c.reppos -= n
-	}
+func (c *client) addReply(s []byte) {
+	c.wBuffer.Write(s)
+	c.wBuffer.Flush()
 }
 
-func (c *client) addReplyBulk(s string) {
-	c.addReply("$" + strconv.Itoa(len(s))+"\r\n")
-	c.addReply(s+"\r\n")
+func (c *client) addReplyBulk(s []byte) {
+	c.wBuffer.Write(bulkhead)
+	c.wBuffer.Write([]byte(strconv.Itoa(len(s))))
+	c.wBuffer.Write(crlf)
+	c.wBuffer.Write(s)
+	c.wBuffer.Write(crlf)
+	c.wBuffer.Flush()
+}
+
+func (c *client) cleanup() {
+	c.conn.Close()
 }
 
 // Return index of newline in slice, -1 if not found

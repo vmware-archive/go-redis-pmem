@@ -16,6 +16,7 @@ import (
 	"log"
 	"reflect"
 	"unsafe"
+	"sync"
 )
 
 type (
@@ -35,20 +36,23 @@ type (
 		level      int         // tx level
 		undoEntry  entryHeader // volatile entry header
 	    entrySlice []byte      // underlying raw byte slice of undoEntry
+	    rlocks	   []*sync.RWMutex
+	    wlocks	   []*sync.RWMutex
 	}
 )
 
 const (
-	max int = 1    // currently only support one outstanding transaction
+	BUFFERSIZE int = 4*1024
 )
 
 var (
-	pool       []*undoTx
+	pool       chan *undoTx
 	undoOff    uintptr     // offset of undo area
 )
 
 func initUndo(id int, logArea []byte) *undoTx{
 	t := new(undoTx)
+	t.id = id
 	t.undoHdr = (*undoHeader)(unsafe.Pointer(&logArea[0]))
 
 	var err error
@@ -65,36 +69,37 @@ func initUndo(id int, logArea []byte) *undoTx{
 	ptr := unsafe.Pointer(&t.undoEntry)
 	size := unsafe.Sizeof(t.undoEntry)
 	t.entrySlice = (*[LOGSIZE]byte)(ptr)[:size:size]
+	// pre allocate some space for holding locks
+	t.wlocks = make([]*sync.RWMutex, 0, 3)
+	t.rlocks = make([]*sync.RWMutex, 0, 3)
 
 	return t
 }
 
-// currently actually only support single thread and single tx
 func InitUndo(logArea []byte) {
 	// init global variables
 	undoOff = uintptr(unsafe.Pointer(&logArea[0]))
 
+	max := len(logArea) / BUFFERSIZE
 	// init transaction pool
-	pool = make([]*undoTx, max)
-	for i, _ := range pool {
+	pool = make(chan *undoTx, max)
+	for i := 0; i < max; i++ {
 		begin := len(logArea)/max*i
 		end := len(logArea)/max*(i+1)
-		pool[i] = initUndo(i, logArea[begin:end])
+		pool <- initUndo(i, logArea[begin:end])
 	}
 }
 
-func newUndo() *undoTx {
-	var t *undoTx = nil
-	if len(pool) > 0 {
-		t = pool[len(pool) - 1]
-		pool = pool[:len(pool) - 1]
-	}
+func NewUndo() TX {
+	t := <- pool
+	// log.Println("Get log ", t.id)
 	return t
 }
 
 func releaseUndo(t *undoTx) {
 	t.Abort()
-	pool= append(pool, t)
+	// log.Println("Release log ", t.id)
+	pool <- t
 }
 
 func (t *undoTx) setUndoHdr(tail int) {
@@ -150,6 +155,7 @@ func (t *undoTx) Commit() error {
 	}
 	t.level--
 	if t.level == 0 {
+		defer t.unLock()
 		/* Need to flush current value of logged areas. */
 		for t.undoBuf.Tail() > 0 {
 			_, err := t.undoBuf.Read(t.entrySlice)
@@ -171,6 +177,7 @@ func (t *undoTx) Commit() error {
 }
 
 func (t *undoTx) Abort() error {
+	defer t.unLock()
 	t.level = 0
 	for t.undoBuf.Tail() > 0 {
 		_, err := t.undoBuf.Read(t.entrySlice)
@@ -188,4 +195,29 @@ func (t *undoTx) Abort() error {
 	}
 	t.setUndoHdr(0)
 	return nil
+}
+
+func (t *undoTx) RLock(m *sync.RWMutex) {
+	m.RLock()
+	//log.Println("Log ", t.id, " rlocking ", m)
+	t.rlocks = append(t.rlocks, m)
+}
+
+func (t *undoTx) WLock(m *sync.RWMutex) {
+	m.Lock()
+	//log.Println("Log ", t.id, " wlocking ", m)
+	t.wlocks = append(t.wlocks, m)
+}
+
+func (t *undoTx) unLock() {
+	for _,m := range t.wlocks {
+		//log.Println("Log ", t.id, " unlocking ", m)
+		m.Unlock()
+	}
+	t.wlocks = t.wlocks[0:0]
+	for _,m := range t.rlocks {
+		//log.Println("Log ", t.id, " runlocking ", m)
+		m.RUnlock()
+	}
+	t.rlocks = t.rlocks[0:0]
 }

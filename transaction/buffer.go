@@ -3,6 +3,8 @@ package transaction
 import (
 	"errors"
 	"unsafe"
+	"log"
+	"runtime/debug"
 )
 
 type logBuffer interface {
@@ -34,6 +36,8 @@ func initLinearUndoBuffer(buffer []byte, tail int) (logBuffer, error) {
 func (b *linearUndoBuffer) Write(input []byte) (n int, err error) {
 	remain := b.capacity - b.tail
 	if len(input) > remain {
+		debug.PrintStack()
+		log.Fatal("tx.buffer: Running out of log space!", b.tail, b.capacity, len(input))
 		return 0, errors.New("tx.buffer: Running out of log space!")
 	}
 
@@ -47,6 +51,8 @@ func (b *linearUndoBuffer) Write(input []byte) (n int, err error) {
 func (b *linearUndoBuffer) Read(output []byte) (n int, err error) {
 	has := b.tail
 	if len(output) > has {
+		debug.PrintStack()
+		log.Fatal("tx.buffer: No enough log data for read!", b.tail, len(output))
 		return 0, errors.New("tx.buffer: No enough log data for read!")
 	}
 
@@ -60,8 +66,12 @@ func (b *linearUndoBuffer) Tail() int {
 	return b.tail
 }
 
-func (b *linearUndoBuffer) Rewind(len int) {
-	b.tail -= len
+func (b *linearUndoBuffer) Rewind(l int) {
+	if l > b.tail {
+		debug.PrintStack()
+		log.Fatal("tx.buffer: No enough log data to rewind!", b.tail, l)
+	}
+	b.tail -= l
 }
 
 func (b *linearUndoBuffer) Clear() {
