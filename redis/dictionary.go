@@ -13,7 +13,7 @@ import (
 const (
 	DictInitSize = 4
 	Ratio = 4
-	Shards = 100
+	Shards = 10
 )
 
 var (
@@ -52,8 +52,8 @@ func NewDict(undoTx transaction.TX) *dict {
 	d.resetTable(1, 0)
 	d.rehashIdx = -1
 	d.lock = new(sync.RWMutex)
-	d.bucketlock[0] = make([]sync.RWMutex, Shards)
-	d.bucketlock[1] = make([]sync.RWMutex, Shards)
+	d.bucketlock[0] = make([]sync.RWMutex, DictInitSize/Shards + 1)
+	//d.bucketlock[1] = make([]sync.RWMutex, Shards)
 	undoTx.Commit()
 	return d
 }
@@ -65,6 +65,7 @@ func (d *dict) resetTable(i int, s int) {
 	} else {
 		// should be replaced with pMake
 		d.tab[i].bucket = make([]*entry, s)
+		d.bucketlock[i] = make([]sync.RWMutex, s/Shards + 1)
 		d.tab[i].mask = s - 1
 	}
 	d.tab[i].used = 0
@@ -100,10 +101,10 @@ func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, i
 	for t = 0; t <= maxt; t++ {
 		i = h & d.tab[t].mask
 		if readOnly {
-			undoTx.RLock(&d.bucketlock[t][i % Shards])
+			undoTx.RLock(&d.bucketlock[t][i / Shards])
 			//undoTx.RLock(d.tab[t].lock)
 		} else {
-			undoTx.WLock(&d.bucketlock[t][i % Shards])
+			undoTx.WLock(&d.bucketlock[t][i / Shards])
 			//undoTx.WLock(d.tab[t].lock)
 		}
 		curr = d.tab[t].bucket[i]
@@ -247,6 +248,7 @@ func (d *dict) Rehash(undoTx transaction.TX, n int) bool {
 		d.tab[0] = d.tab[1]
 		d.resetTable(1, 0)
 		d.rehashIdx = -1
+		d.bucketlock[0] = d.bucketlock[1]
 		fmt.Println("Rehash finished!")
 	}
 
