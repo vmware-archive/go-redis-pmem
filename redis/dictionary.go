@@ -8,6 +8,7 @@ import (
 	"sync"
 	"fmt"
 	"bytes"
+	"strconv"
 )
 
 const (
@@ -80,14 +81,23 @@ func newLocks(n int) (l []*sync.RWMutex) {
 	return l
 }
 
-func (d *dict) hashKey(key []byte) int { // may implement fast hashing in asm
+func (d *dict) hashKey(key []byte) int {
+	return memtierhash(key)
+}
+
+func fnvhash(key []byte) int {
 	fnvHash.Write(key)
 	h := int(fnvHash.Sum32())
 	fnvHash.Reset()
 	return h
 }
 
-func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, int, *entry, *entry) {
+func memtierhash(key []byte) int {
+	h, _ := strconv.Atoi(string(key[8:]))
+	return h
+}
+
+func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, int, *entry, *entry, float64) {
 	h := d.hashKey(key)
 	var (
 		t, maxt, i int
@@ -98,6 +108,7 @@ func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, i
 	} else {
 		maxt = 0
 	}
+	var cmp float64 = 0
 	for t = 0; t <= maxt; t++ {
 		i = h & d.tab[t].mask
 		if readOnly {
@@ -109,14 +120,15 @@ func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, i
 		}
 		curr = d.tab[t].bucket[i]
 		for curr != nil {
+			cmp++
 			if bytes.Compare(curr.key, key) == 0 {
-				return t, i, pre, curr
+				return t, i, pre, curr, cmp
 			}
 			pre = curr
 			curr = curr.next
 		}
 	}
-	return maxt, i, pre, curr
+	return maxt, i, pre, curr, cmp
 }
 
 func (d *dict) Used(undoTx transaction.TX) int {
@@ -129,13 +141,13 @@ func (d *dict) Used(undoTx transaction.TX) int {
 	return d.tab[0].used + d.tab[1].used
 }
 
-func (d *dict) Set(undoTx transaction.TX, key, value []byte) {
+func (d *dict) Set(undoTx transaction.TX, key, value []byte) (int, int, float64) {
 	undoTx.Begin()
 	defer undoTx.Commit()
 
 	undoTx.RLock(d.lock)
 
-	t, i, _, e := d.findKey(undoTx, key, false)
+	t, i, _, e, c := d.findKey(undoTx, key, false)
 
 	// copy volatile value into pmem heap (need pmake and a helper function for copy)
 	v := make([]byte, len(value))//(*[1<<30]byte)(heap.Alloc(undoTx, len(value)))[:len(value):len(value)]
@@ -145,6 +157,7 @@ func (d *dict) Set(undoTx transaction.TX, key, value []byte) {
 	if e != nil { // note that gc cannot recycle e.value before commit.
 		undoTx.Log(&e.value)
 		e.value = v
+		return 0, 1, c
 	} else {
 		// copy volatile value into pmem heap (need pmake and a helper function for this copy)
 		k := make([]byte, len(key))//(*[1<<30]byte)(heap.Alloc(undoTx, len(key)))[:len(key):len(key)]
@@ -162,6 +175,7 @@ func (d *dict) Set(undoTx transaction.TX, key, value []byte) {
 		undoTx.WLock(d.tab[t].lock)
 		undoTx.Log(d.tab[t].used)
 		d.tab[t].used++
+		return 1, 0, c
 	}
 }
 
@@ -171,7 +185,7 @@ func (d *dict) Get(undoTx transaction.TX, key []byte) []byte {
 
 	undoTx.RLock(d.lock)
 
-	_, _, _, e := d.findKey(undoTx, key, true)
+	_, _, _, e, _ := d.findKey(undoTx, key, true)
 	if e != nil {
 		return e.value
 	}
@@ -184,7 +198,7 @@ func (d *dict) Del(undoTx transaction.TX, key []byte) bool {
 
 	undoTx.RLock(d.lock)
 
-	t, i, p, e := d.findKey(undoTx, key, false)
+	t, i, p, e, _ := d.findKey(undoTx, key, false)
 	deleted := false
 	if e != nil { // note that gc cannot recycle e before commit.
 		// update bucket (already locked when find key)

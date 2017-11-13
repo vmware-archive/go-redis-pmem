@@ -6,6 +6,9 @@ import (
 	"pmem/region"
 	"pmem/transaction"
 	"unsafe"
+	"pmem/redis"
+	"net/http"
+    _ "net/http/pprof"
 )
 
 type Node struct {
@@ -59,6 +62,7 @@ func (l *List) Swizzle(t transaction.TX) {
 }
 
 func main() {
+	/*
 	region.Init("pmem_toyList_example", 8*1024, 11111)
 	var l *List
 	lptr := region.GetRoot()
@@ -77,4 +81,7 @@ func main() {
 		l.Show()
 	}
 	transaction.Release(t)
+	*/
+	go redis.RunServer(300)
+	http.ListenAndServe(":8080", nil)
 }

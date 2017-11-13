@@ -42,8 +42,17 @@ type (
 		querybuf 		[]byte
 		multibulklen 	int
 		bulklen	 		int
+		add int
+		update int
+		avg float64
 	}
 )
+
+func RunServer(t int) {
+	s := new(server)
+	go s.Start()
+	time.Sleep(time.Duration(t)*time.Second)
+}
 
 func (s *server) init(path string) {
 	region.Init(path, DATASIZE, UUID)
@@ -76,12 +85,12 @@ func (s *server) Start() {
 }
 
 func (s *server) Cron() {
+	undoTx := transaction.NewUndo()
 	for {
-		time.Sleep(10 * time.Millisecond)
-		undoTx := transaction.NewUndo()
+		time.Sleep(1 * time.Millisecond)
 		s.db.ResizeIfNeeded(undoTx)
-		s.db.Rehash(undoTx, 10)
-		transaction.Release(undoTx)
+		s.db.Rehash(undoTx, 50)
+		//transaction.Release(undoTx)
 	}
 }
 
@@ -89,12 +98,12 @@ func (s *server) handleClient(conn *net.TCPConn) {
 	// defer conn.Close()
 	c := s.newClient(conn)
 	c.conn.SetNoDelay(false) // try batching packet to improve tp.
-	go c.processInput()
+	c.processInput()
 	//go c.processOutput()
 }
 
 func (s * server) newClient(conn *net.TCPConn) *client {
-	return &client{s, s.db, conn, bufio.NewReader(conn), bufio.NewWriter(conn), 0, nil, make([]byte, 1024), 0, -1}
+	return &client{s, s.db, conn, bufio.NewReader(conn), bufio.NewWriter(conn), 0, nil, make([]byte, 1024), 0, -1,0,0,0}
 }
 
 // Process input buffer and call command.
@@ -208,8 +217,17 @@ func (c *client) processCommand() {
 	if string(c.argv[0]) == "SET" && len(c.argv) == 3 {
 		tx := transaction.NewUndo()
 		//fmt.Println("Set", string(c.argv[1]), string(c.argv[2]))
-		c.db.Set(tx, c.argv[1], c.argv[2])
+		a, u, v := c.db.Set(tx, c.argv[1], c.argv[2])
 		transaction.Release(tx)
+		c.add += a
+		c.update += u
+		c.avg = c.avg + (v - c.avg)/float64(c.add + c.update)
+		if (c.add + c.update) % 100000 == 0 {
+			fmt.Println("Client set statistics:", c.add, "inserts", c.update, "updates", c.avg, "avg compares per search.")
+			c.add = 0
+			c.update = 0
+			c.avg = 0
+		}  
 		c.addReply(ok)
 	} else if string(c.argv[0]) == "GET" && len(c.argv) == 2 {
 		tx := transaction.NewReadonly()

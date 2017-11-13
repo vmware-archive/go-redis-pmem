@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	LOGSIZE   int     = 128 * 1024
+	LOGSIZE   int     = 16 * 1024 * 1024
 	CACHELINE uintptr = 64
 )
 

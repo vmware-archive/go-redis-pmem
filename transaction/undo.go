@@ -42,7 +42,7 @@ type (
 )
 
 const (
-	BUFFERSIZE int = 4*1024
+	BUFFERSIZE int = 16*1024
 )
 
 var (
