@@ -82,6 +82,6 @@ func main() {
 	}
 	transaction.Release(t)
 	*/
-	go redis.RunServer(300)
+	go redis.RunServer()
 	http.ListenAndServe(":8080", nil)
 }

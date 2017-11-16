@@ -7,28 +7,20 @@ import (
 	"time"
 	"bufio"
 	"strconv"
+	_"strings"
 	"pmem/region"
 	"pmem/transaction"
-)
-
-const (
-	DATASIZE int 	= 500000000
-	UUID 	 int 	= 9524
-	PORT	 string = ":6379"
-)
-
-var (
-	crlf		[]byte = []byte("\r\n")
-	ok          []byte = []byte("+OK\r\n")
-	nullbulk	[]byte = []byte("$-1\r\n")
-	bulkhead	[]byte = []byte("$")
-
-	foo			[]byte = []byte("foo")
 )
 
 type (
 	server struct {
 		db    		*dict
+		commands	map[string](*redisCommand)
+	}
+
+	redisCommand struct {
+		name 	string
+		proc 	func(*client)
 	}
 
 	client struct {
@@ -42,23 +34,35 @@ type (
 		querybuf 		[]byte
 		multibulklen 	int
 		bulklen	 		int
+		cmd 			*redisCommand
 		add int
 		update int
 		avg float64
 	}
 )
 
-func RunServer(t int) {
-	s := new(server)
-	go s.Start()
-	time.Sleep(time.Duration(t)*time.Second)
-}
+const (
+	DATASIZE int 	= 32000000
+	UUID 	 int 	= 9524
+	PORT	 string = ":6379"
+)
 
-func (s *server) init(path string) {
-	region.Init(path, DATASIZE, UUID)
-	tx := transaction.NewUndo()
-	s.db = NewDict(tx)
-	transaction.Release(tx)
+var (
+	crlf			= []byte("\r\n")
+	ok          	= []byte("+OK\r\n")
+	nullbulk		= []byte("$-1\r\n")
+	bulkhead		= []byte("$")
+
+	foo				= []byte("foo")
+
+	redisCommandTable = [...]redisCommand{
+		redisCommand{"SET", setCommand},
+		redisCommand{"GET", getCommand}}
+)
+
+func RunServer() {
+	s := new(server)
+	s.Start()
 }
 
 func (s *server) Start() {
@@ -84,6 +88,21 @@ func (s *server) Start() {
     }
 }
 
+func (s *server) init(path string) {
+	region.Init(path, DATASIZE, UUID)
+	tx := transaction.NewUndo()
+	s.db = NewDict(tx)
+	transaction.Release(tx)
+	s.populateCommandTable()
+}
+
+func (s *server) populateCommandTable() {
+	s.commands = make(map[string](*redisCommand))
+	for i, v := range(redisCommandTable) {
+		s.commands[v.name] = &redisCommandTable[i]
+	}
+}
+
 func (s *server) Cron() {
 	undoTx := transaction.NewUndo()
 	for {
@@ -103,7 +122,20 @@ func (s *server) handleClient(conn *net.TCPConn) {
 }
 
 func (s * server) newClient(conn *net.TCPConn) *client {
-	return &client{s, s.db, conn, bufio.NewReader(conn), bufio.NewWriter(conn), 0, nil, make([]byte, 1024), 0, -1,0,0,0}
+	return 	&client{s, 
+					s.db, 
+					conn, 
+					bufio.NewReader(conn), 
+					bufio.NewWriter(conn), 
+					0, 
+					nil, 
+					make([]byte, 1024), 
+					0, 
+					-1, 
+					nil, 
+					0,
+					0,
+					0}
 }
 
 // Process input buffer and call command.
@@ -198,11 +230,18 @@ func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 	return begin, true
 }
 
-func printArgs(argv [][]byte) {
-	fmt.Println("Client has", len(argv), "arguments:")
-	for _,q := range argv {
-		fmt.Println(string(q))
+// Return index of newline in slice, -1 if not found
+func findNewLine(buf []byte) int {
+	for i, c := range buf[:] {
+		if c == '\n' {
+			return i
+		}
 	}
+	return -1
+}
+
+func slice2i(buf []byte) (int, error) {
+	return strconv.Atoi(string(buf))
 }
 
 func (c *client) reset() {
@@ -214,35 +253,22 @@ func (c *client) reset() {
 
 // currenlty only support simple SET/GET that is used by memtierbenchmark
 func (c *client) processCommand() {
-	if string(c.argv[0]) == "SET" && len(c.argv) == 3 {
-		tx := transaction.NewUndo()
-		//fmt.Println("Set", string(c.argv[1]), string(c.argv[2]))
-		a, u, v := c.db.Set(tx, c.argv[1], c.argv[2])
-		transaction.Release(tx)
-		c.add += a
-		c.update += u
-		c.avg = c.avg + (v - c.avg)/float64(c.add + c.update)
-		if (c.add + c.update) % 100000 == 0 {
-			fmt.Println("Client set statistics:", c.add, "inserts", c.update, "updates", c.avg, "avg compares per search.")
-			c.add = 0
-			c.update = 0
-			c.avg = 0
-		}  
-		c.addReply(ok)
-	} else if string(c.argv[0]) == "GET" && len(c.argv) == 2 {
-		tx := transaction.NewReadonly()
-		v := c.db.Get(tx, c.argv[1])
-		//fmt.Println("Get", string(c.argv[1]), v)
-		transaction.Release(tx)
-		if len(v) == 0 {
-			c.addReply(nullbulk)
-			//c.addReplyBulk(foo)
-		} else {
-			c.addReplyBulk(v)
-		}
+	c.lookupCommand()
+	if c.cmd == nil {
+		c.notSupported()
 	} else {
-		fmt.Println("Command not supported!")
-		printArgs(c.argv)
+		c.cmd.proc(c)
+	}
+}
+
+func (c *client) lookupCommand() {
+	c.cmd = c.s.commands[(string(c.argv[0]))]
+}
+
+func (c *client) notSupported() {
+	fmt.Println("Command not supported!")
+	for _,q := range c.argv {
+		fmt.Print(string(q), " ")
 	}
 }
 
@@ -262,20 +288,6 @@ func (c *client) addReplyBulk(s []byte) {
 
 func (c *client) cleanup() {
 	c.conn.Close()
-}
-
-// Return index of newline in slice, -1 if not found
-func findNewLine(buf []byte) int {
-	for i, c := range buf[:] {
-		if c == '\n' {
-			return i
-		}
-	}
-	return -1
-}
-
-func slice2i(buf []byte) (int, error) {
-	return strconv.Atoi(string(buf))
 }
 
 func fatalError(err error) {
