@@ -23,7 +23,7 @@ func TestServer(t *testing.T) {
 	conn.Write([]byte("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
 	time.Sleep(1*time.Second)
 	undoTx := transaction.NewUndo()
-	fmt.Println(s.db.Get(undoTx, []byte("foo")))
+	fmt.Println(s.db.dict.Get(undoTx, []byte("foo")))
 	transaction.Release(undoTx)
 }
 

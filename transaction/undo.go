@@ -209,6 +209,10 @@ func (t *undoTx) WLock(m *sync.RWMutex) {
 	t.wlocks = append(t.wlocks, m)
 }
 
+func (t *undoTx) Lock(m *sync.RWMutex) {
+	t.WLock(m)
+}
+
 func (t *undoTx) unLock() {
 	for _,m := range t.wlocks {
 		//log.Println("Log ", t.id, " unlocking ", m)

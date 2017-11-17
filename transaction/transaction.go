@@ -20,6 +20,7 @@ type (
 		Abort() error
 		RLock(*sync.RWMutex)
 		WLock(*sync.RWMutex)
+		Lock(*sync.RWMutex)
 	}
 )
 

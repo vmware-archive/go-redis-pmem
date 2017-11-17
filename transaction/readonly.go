@@ -59,6 +59,10 @@ func (t *readonlyTx) WLock(m *sync.RWMutex) {
 	log.Fatal("tx.readonly: cannot hold write lock in readonly transaction!")
 }
 
+func (t *readonlyTx) Lock(m *sync.RWMutex) {
+	t.RLock(m)
+}
+
 func (t *readonlyTx) unLock() {
 	for _,m := range t.rlocks {
 		//log.Println("Log ", t.id, " runlocking ", m)

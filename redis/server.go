@@ -14,30 +14,41 @@ import (
 
 type (
 	server struct {
-		db    		*dict
+		db    		*redisDb
 		commands	map[string](*redisCommand)
+	}
+
+	redisDb struct {
+		dict 		*dict
+		expire		*dict
 	}
 
 	redisCommand struct {
 		name 	string
 		proc 	func(*client)
+		flag	int
 	}
 
 	client struct {
 		s 				*server
-		db       		*dict
+		db       		*redisDb
 		conn     		*net.TCPConn
 		rBuffer			*bufio.Reader
 		wBuffer 		*bufio.Writer
+
 		argc	 		int
 		argv	 		[][]byte
+
 		querybuf 		[]byte
 		multibulklen 	int
 		bulklen	 		int
+
 		cmd 			*redisCommand
-		add int
-		update int
-		avg float64
+		tx 				transaction.TX
+	}
+
+	sharedObjects struct {
+		crlf, ok, nullbulk, bulkhead, inthead []byte
 	}
 )
 
@@ -45,19 +56,21 @@ const (
 	DATASIZE int 	= 32000000
 	UUID 	 int 	= 9524
 	PORT	 string = ":6379"
+
+	CMD_WRITE int 	= 1
+	CMD_READONLY int = 2
 )
 
 var (
-	crlf			= []byte("\r\n")
-	ok          	= []byte("+OK\r\n")
-	nullbulk		= []byte("$-1\r\n")
-	bulkhead		= []byte("$")
-
-	foo				= []byte("foo")
-
+	shared 	sharedObjects
 	redisCommandTable = [...]redisCommand{
-		redisCommand{"SET", setCommand},
-		redisCommand{"GET", getCommand}}
+		redisCommand{"GET",			getCommand, 		CMD_READONLY},
+		redisCommand{"EXISTS", 		existsCommand, 		CMD_READONLY},
+		redisCommand{"DBSIZE", 		dbsizeCommand, 		CMD_READONLY},
+		redisCommand{"RANDOMKEY",	randomkeyCommand, 	CMD_READONLY},
+		redisCommand{"SET", 		setCommand, 		CMD_WRITE},
+		redisCommand{"DEL", 		delCommand, 		CMD_WRITE},
+		redisCommand{"FLUSHDB",		flushdbCommand,		CMD_WRITE}}
 )
 
 func RunServer() {
@@ -91,9 +104,10 @@ func (s *server) Start() {
 func (s *server) init(path string) {
 	region.Init(path, DATASIZE, UUID)
 	tx := transaction.NewUndo()
-	s.db = NewDict(tx)
+	s.db = &redisDb{NewDict(tx), NewDict(tx)}
 	transaction.Release(tx)
 	s.populateCommandTable()
+	createSharedObjects()
 }
 
 func (s *server) populateCommandTable() {
@@ -103,12 +117,23 @@ func (s *server) populateCommandTable() {
 	}
 }
 
+func createSharedObjects() {
+	shared = sharedObjects{
+		crlf		: []byte("\r\n"),
+		ok          : []byte("+OK\r\n"),
+		nullbulk	: []byte("$-1\r\n"),
+		bulkhead	: []byte("$"),
+		inthead		: []byte(":")}
+}
+
 func (s *server) Cron() {
 	undoTx := transaction.NewUndo()
 	for {
 		time.Sleep(1 * time.Millisecond)
-		s.db.ResizeIfNeeded(undoTx)
-		s.db.Rehash(undoTx, 50)
+		needRehash := s.db.dict.Rehash(undoTx, 50)
+		if !needRehash {
+			s.db.dict.ResizeIfNeeded(undoTx)
+		}
 		//transaction.Release(undoTx)
 	}
 }
@@ -122,20 +147,18 @@ func (s *server) handleClient(conn *net.TCPConn) {
 }
 
 func (s * server) newClient(conn *net.TCPConn) *client {
-	return 	&client{s, 
-					s.db, 
-					conn, 
-					bufio.NewReader(conn), 
-					bufio.NewWriter(conn), 
-					0, 
-					nil, 
-					make([]byte, 1024), 
-					0, 
-					-1, 
-					nil, 
-					0,
-					0,
-					0}
+	return 	&client{s  			 : s,
+					db 			 : s.db,
+					conn 		 : conn,
+					rBuffer		 : bufio.NewReader(conn),
+					wBuffer 	 : bufio.NewWriter(conn),
+					argc		 : 0,
+					argv		 : nil,
+					querybuf	 : make([]byte, 1024),
+					multibulklen : 0,
+					bulklen	 	 : -1,
+					cmd 		 : nil,
+					tx 			 : nil,}
 }
 
 // Process input buffer and call command.
@@ -257,7 +280,17 @@ func (c *client) processCommand() {
 	if c.cmd == nil {
 		c.notSupported()
 	} else {
+		if c.cmd.flag & CMD_READONLY > 0 {
+			c.tx = transaction.NewReadonly()
+		} else {
+			c.tx = transaction.NewUndo()
+		}
+		c.tx.Begin()
 		c.cmd.proc(c)
+		c.tx.Commit()
+		transaction.Release(c.tx)
+		c.tx = nil
+		c.wBuffer.Flush()
 	}
 }
 
@@ -274,16 +307,20 @@ func (c *client) notSupported() {
 
 func (c *client) addReply(s []byte) {
 	c.wBuffer.Write(s)
-	c.wBuffer.Flush()
 }
 
 func (c *client) addReplyBulk(s []byte) {
-	c.wBuffer.Write(bulkhead)
-	c.wBuffer.Write([]byte(strconv.Itoa(len(s))))
-	c.wBuffer.Write(crlf)
+	c.wBuffer.Write(shared.bulkhead)
+	c.wBuffer.Write([]byte(strconv.Itoa(len(s)))) // not efficient
+	c.wBuffer.Write(shared.crlf)
 	c.wBuffer.Write(s)
-	c.wBuffer.Write(crlf)
-	c.wBuffer.Flush()
+	c.wBuffer.Write(shared.crlf)
+}
+
+func (c *client) addReplyLongLong(ll int) {
+	c.wBuffer.Write(shared.inthead)
+	c.wBuffer.Write([]byte(strconv.Itoa(ll))) // not efficient
+	c.wBuffer.Write(shared.crlf)
 }
 
 func (c *client) cleanup() {
