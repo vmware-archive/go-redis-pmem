@@ -7,7 +7,7 @@ import (
 func existsCommand(c *client) {
 	count := 0
 
-	c.db.dict.lockKeys(c.tx, c.argv[1:])
+	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
 
 	for _, key := range(c.argv[1:]) {
 		if c.db.lookupKey(key) != nil {
@@ -20,7 +20,7 @@ func existsCommand(c *client) {
 func delCommand(c *client) {
 	count := 0
 
-	c.db.dict.lockKeys(c.tx, c.argv[1:])
+	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
 
 	for _, key := range(c.argv[1:]) {
 		if c.db.delete(c.tx, key) {
@@ -66,8 +66,8 @@ func (db *redisDb) randomKey() []byte {
 	}
 }
 
-func (db *redisDb) setKey(tx transaction.TX, key, value []byte) {
-	db.dict.set(tx, key, value)
+func (db *redisDb) setKey(tx transaction.TX, key, value []byte) (insert bool) {
+	return db.dict.set(tx, key, value)
 }
 
 func (db *redisDb) delete(tx transaction.TX, key []byte) bool {

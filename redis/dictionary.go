@@ -341,23 +341,23 @@ func (d *dict) lockKey(tx transaction.TX, key []byte) {
 	}
 
 	for t := 0; t <= maxt; t++ {
-		s := d.findShard(key, t)
+		s := d.findShard(t, key)
 		d.lockShard(tx, t, s)
 	}
 }
 
-func (d *dict) lockKeys(tx transaction.TX, keys [][]byte) {
+func (d *dict) lockKeys(tx transaction.TX, keys [][]byte, stride int) {
 	tx.RLock(d.lock)
 
 	maxt := 0
 	if d.tab[1].mask > 0 {
 		maxt = 1
 	}
-	shards := make([]int, len(keys))
+	shards := make([]int, len(keys) / stride)
 
 	for t := 0; t <= maxt; t++ {
 		for i, _ := range(shards) {
-			shards[i] = d.findShard(keys[i], t) 
+			shards[i] = d.findShard(t, keys[i*stride]) 
 		}
 		// make sure locks are acquired in the same order (ascending table and bucket id) to prevent deadlock!
 		sort.Ints(shards) 
@@ -391,11 +391,12 @@ func (d *dict) lockTables(tx transaction.TX) {
 	tx.WLock(d.lock)
 }
 
-func (d *dict) findShard(key []byte, t int) int {
+func (d *dict) findShard(t int, key []byte) int {
 	return shard(d.hashKey(key) & d.tab[t].mask)
 }
 
 func (d *dict) lockShard(tx transaction.TX, t, s int) {
+	// ReadOnly commands will aquire readOnly tx and read locks, otherwise WLock is aquired.
 	tx.Lock(&d.tab[t].bucketlock[s])
 }
 
@@ -425,7 +426,7 @@ func (d *dict) find(key []byte) (int, int, *entry, *entry) {
 	return maxt, b, pre, curr
 }
 
-func (d *dict) set(tx transaction.TX, key, value []byte) (added bool) {
+func (d *dict) set(tx transaction.TX, key, value []byte) (insert bool) {
 	t, b, _, e := d.find(key)
 
 	// copy volatile value into pmem heap (need pmake and a helper function for copy)

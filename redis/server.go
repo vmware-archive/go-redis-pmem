@@ -48,7 +48,7 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, ok, nullbulk, bulkhead, inthead []byte
+		crlf, czero, cone, ok, nullbulk, emptybulk, bulkhead, inthead, arrayhead []byte
 	}
 )
 
@@ -65,10 +65,18 @@ var (
 	shared 	sharedObjects
 	redisCommandTable = [...]redisCommand{
 		redisCommand{"GET",			getCommand, 		CMD_READONLY},
+		redisCommand{"GETRANGE",	getrangeCommand, 	CMD_READONLY},
+		redisCommand{"MGET",		mgetCommand,		CMD_READONLY},
 		redisCommand{"EXISTS", 		existsCommand, 		CMD_READONLY},
 		redisCommand{"DBSIZE", 		dbsizeCommand, 		CMD_READONLY},
 		redisCommand{"RANDOMKEY",	randomkeyCommand, 	CMD_READONLY},
+		redisCommand{"STRLEN",		strlenCommand, 		CMD_READONLY},
+		redisCommand{"APPEND",		appendCommand,		CMD_WRITE},
 		redisCommand{"SET", 		setCommand, 		CMD_WRITE},
+		redisCommand{"SETRANGE", 	setrangeCommand, 	CMD_WRITE},
+		redisCommand{"GETSET",		getsetCommand,		CMD_WRITE},
+		redisCommand{"MSET",		msetCommand,		CMD_WRITE},
+		redisCommand{"MSETNX",		msetnxCommand,		CMD_WRITE},
 		redisCommand{"DEL", 		delCommand, 		CMD_WRITE},
 		redisCommand{"FLUSHDB",		flushdbCommand,		CMD_WRITE}}
 )
@@ -120,10 +128,14 @@ func (s *server) populateCommandTable() {
 func createSharedObjects() {
 	shared = sharedObjects{
 		crlf		: []byte("\r\n"),
+		czero		: []byte(":0\r\n"),
+		cone		: []byte(":1\r\n"),
 		ok          : []byte("+OK\r\n"),
 		nullbulk	: []byte("$-1\r\n"),
+		emptybulk	: []byte("$0\r\n\r\n"),
 		bulkhead	: []byte("$"),
-		inthead		: []byte(":")}
+		inthead		: []byte(":"),
+		arrayhead	: []byte("*")}
 }
 
 func (s *server) Cron() {
@@ -320,6 +332,18 @@ func (c *client) addReplyBulk(s []byte) {
 func (c *client) addReplyLongLong(ll int) {
 	c.wBuffer.Write(shared.inthead)
 	c.wBuffer.Write([]byte(strconv.Itoa(ll))) // not efficient
+	c.wBuffer.Write(shared.crlf)
+}
+
+func (c *client) addReplyMultiBulkLen(ll int) {
+	c.wBuffer.Write(shared.arrayhead)
+	c.wBuffer.Write([]byte(strconv.Itoa(ll))) // not efficient
+	c.wBuffer.Write(shared.crlf)
+}
+
+func (c *client) addReplyError(err []byte) {
+	c.wBuffer.Write([]byte("-ERR "))
+	c.wBuffer.Write(err)
 	c.wBuffer.Write(shared.crlf)
 }
 
