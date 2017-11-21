@@ -6,24 +6,24 @@ import (
 )
 
 func setCommand(c *client) {
-	c.db.dict.lockKey(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.tx, c.argv[1])
 	c.db.setKey(c.tx, c.argv[1], c.argv[2])
 	c.addReply(shared.ok)
 }
 
 func getCommand(c *client) {
-	c.db.dict.lockKey(c.tx, c.argv[1])
+	c.db.lockKeyRead(c.tx, c.argv[1])
 	c.getGeneric()
 }
 
 func getsetCommand(c *client) {
-	c.db.dict.lockKey(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.tx, c.argv[1])
 	c.getGeneric()
 	c.db.setKey(c.tx, c.argv[1], c.argv[2])
 }
 
 func (c *client) getGeneric() {
-	v := c.db.lookupKey(c.argv[1])
+	v := c.db.lookupKeyRead(c.tx, c.argv[1])
 	if v == nil {
 		c.addReply(shared.nullbulk)
 	} else {
@@ -41,8 +41,8 @@ func setrangeCommand(c *client) {
 		return
 	}
 	update := c.argv[3]
-	c.db.dict.lockKey(c.tx, c.argv[1])
-	v := c.db.lookupKey(c.argv[1])
+	c.db.lockKeyWrite(c.tx, c.argv[1])
+	v := c.db.lookupKeyWrite(c.tx, c.argv[1])
 
 	if v == nil {
 		if len(update) == 0 {
@@ -90,8 +90,8 @@ func getrangeCommand(c *client) {
 		c.addReplyError([]byte("value is not an integer"))
 	}
 
-	c.db.dict.lockKey(c.tx, c.argv[1])
-	v := c.db.lookupKey(c.argv[1])
+	c.db.lockKeyRead(c.tx, c.argv[1])
+	v := c.db.lookupKeyRead(c.tx, c.argv[1])
 	strlen := len(v)
 
 	if start < 0 {
@@ -119,9 +119,9 @@ func getrangeCommand(c *client) {
 
 func mgetCommand(c *client) {
 	c.addReplyMultiBulkLen(c.argc - 1)
-	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
+	c.db.lockKeysRead(c.tx, c.argv[1:], 1)
 	for _, k := range c.argv[1:] {
-		v := c.db.lookupKey(k)
+		v := c.db.lookupKeyRead(c.tx, k)
 		if v == nil {
 			c.addReply(shared.nullbulk)
 		} else {
@@ -143,10 +143,10 @@ func (c *client) msetGeneric(nx bool) {
 		c.addReplyError([]byte("wrong number of arguments for MSET"))
 		return
 	}
-	c.db.dict.lockKeys(c.tx, c.argv[1:], 2)
+	c.db.lockKeysWrite(c.tx, c.argv[1:], 2)
 	if nx {
 		for i := 1; i < c.argc; i += 2 {
-			if c.db.lookupKey(c.argv[i]) != nil {
+			if c.db.lookupKeyWrite(c.tx, c.argv[i]) != nil {
 				c.addReply(shared.czero)
 				return
 			}
@@ -165,8 +165,8 @@ func (c *client) msetGeneric(nx bool) {
 
 func appendCommand(c *client) {
 	totlen := 0
-	c.db.dict.lockKey(c.tx, c.argv[1])
-	v := c.db.lookupKey(c.argv[1])
+	c.db.lockKeyWrite(c.tx, c.argv[1])
+	v := c.db.lookupKeyWrite(c.tx, c.argv[1])
 	if v == nil {
 		/* Create the key */
 		c.db.setKey(c.tx, c.argv[1], c.argv[2])
@@ -181,9 +181,9 @@ func appendCommand(c *client) {
 }
 
 func strlenCommand(c *client) {
-	c.db.dict.lockKey(c.tx, c.argv[1])
+	c.db.lockKeyRead(c.tx, c.argv[1])
 
-	v := c.db.lookupKey(c.argv[1])
+	v := c.db.lookupKeyRead(c.tx, c.argv[1])
 	if v == nil {
 		c.addReply(shared.czero)
 	}

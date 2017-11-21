@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	DictInitSize   = 4
-	Ratio          = 4
-	BucketPerShard = 100
+	DictInitSize   = 1024
+	Ratio          = 2
+	BucketPerShard = 128
 )
 
 var (
@@ -68,7 +68,7 @@ func (d *dict) resetTable(tx transaction.TX, i int, s int) {
 		d.tab[i].bucket = nil
 		d.tab[i].used = nil
 	} else {
-		shards := shard(s) + 1 // add one more shard for easy of logging.
+		shards := shard(s)
 		d.tab[i].bucketlock = make([]sync.RWMutex, shards)
 		d.tab[i].bucket = make([]*entry, s)
 		d.tab[i].used = make([]int, shards)
@@ -315,9 +315,9 @@ func (d *dict) ResizeIfNeeded(undoTx transaction.TX) {
 	rehashIdx := d.rehashIdx
 
 	if rehashIdx < 0 {
-		size := len(d.tab[0].bucket)
+		size := d.tab[0].mask + 1
 		used := 0
-		for i := 0; i <= shard(size); i++ {
+		for i := 0; i < shard(size); i++ {
 			used += d.tab[0].used[i]
 		}
 		if used > size {
@@ -381,7 +381,7 @@ func (d *dict) lockAllKeys(tx transaction.TX) {
 	}
 
 	for t := 0; t <= maxt; t++ {
-		for s := 0; s <= shard(d.tab[t].mask+1); s++ {
+		for s := 0; s < shard(d.tab[t].mask+1); s++ {
 			d.lockShard(tx, t, s)
 		}
 	}

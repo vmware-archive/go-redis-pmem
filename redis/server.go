@@ -78,7 +78,11 @@ var (
 		redisCommand{"MSET", msetCommand, CMD_WRITE},
 		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE},
 		redisCommand{"DEL", delCommand, CMD_WRITE},
-		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE}}
+		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
+		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
+		redisCommand{"EXPIREAT", expireatCommand, CMD_WRITE},
+		redisCommand{"PEXPIRE", pexpireCommand, CMD_WRITE},
+		redisCommand{"PEXPIREAT", pexpireatCommand, CMD_WRITE}}
 )
 
 func RunServer() {
