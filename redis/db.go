@@ -9,7 +9,7 @@ func existsCommand(c *client) {
 
 	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
 
-	for _, key := range(c.argv[1:]) {
+	for _, key := range c.argv[1:] {
 		if c.db.lookupKey(key) != nil {
 			count++
 		}
@@ -22,12 +22,12 @@ func delCommand(c *client) {
 
 	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
 
-	for _, key := range(c.argv[1:]) {
+	for _, key := range c.argv[1:] {
 		if c.db.delete(c.tx, key) {
 			count++
 		}
 	}
-	c.addReplyLongLong(count)	
+	c.addReplyLongLong(count)
 }
 
 func dbsizeCommand(c *client) {

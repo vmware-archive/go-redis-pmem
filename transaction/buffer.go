@@ -2,9 +2,9 @@ package transaction
 
 import (
 	"errors"
-	"unsafe"
 	"log"
 	"runtime/debug"
+	"unsafe"
 )
 
 type logBuffer interface {

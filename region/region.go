@@ -59,8 +59,8 @@ func Init(pathname string, size, uuid int) {
 	hdSize := int(unsafe.Sizeof(*_region))
 
 	// (3) init log and heap
-	transaction.Init(fdata[hdSize:(hdSize+transaction.LOGSIZE)])
-	undoTx := transaction.NewUndo() 
+	transaction.Init(fdata[hdSize:(hdSize + transaction.LOGSIZE)])
+	undoTx := transaction.NewUndo()
 	heapOffset := hdSize + transaction.LOGSIZE
 	heap.Init(undoTx, fdata[heapOffset:], size-heapOffset)
 

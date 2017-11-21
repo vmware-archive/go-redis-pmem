@@ -1,15 +1,14 @@
 package redis
 
 import (
-	"testing"
-	"runtime/debug"
-	"pmem/transaction"
-	"pmem/heap"
 	"fmt"
-	"strconv"
-	"time"
 	_ "net/http/pprof"
-
+	"pmem/heap"
+	"pmem/transaction"
+	"runtime/debug"
+	"strconv"
+	"testing"
+	"time"
 )
 
 var d *dict
@@ -17,16 +16,15 @@ var d *dict
 func TestServer(t *testing.T) {
 	s := new(server)
 	go s.Start()
-	time.Sleep(180*time.Second)
-		
+	time.Sleep(180 * time.Second)
+
 	conn := getClient()
 	conn.Write([]byte("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
-	time.Sleep(1*time.Second)
+	time.Sleep(1 * time.Second)
 	undoTx := transaction.NewUndo()
 	fmt.Println(s.db.dict.Get(undoTx, []byte("foo")))
 	transaction.Release(undoTx)
 }
-
 
 /*
 func TestDict(t *testing.T) {
@@ -74,7 +72,7 @@ func BenchmarkDictSet(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		d.Set(undoTx, []byte(strconv.Itoa(i%10000)),[]byte(strconv.Itoa(i)))
+		d.Set(undoTx, []byte(strconv.Itoa(i%10000)), []byte(strconv.Itoa(i)))
 	}
 }
 
@@ -86,4 +84,3 @@ func BenchmarkMapInsert(b *testing.B) {
 		mbench[strconv.Itoa(i%10000)] = strconv.Itoa(i)
 	}
 }
-

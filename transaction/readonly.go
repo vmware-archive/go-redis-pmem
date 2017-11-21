@@ -8,8 +8,8 @@ import (
 
 type (
 	readonlyTx struct {
-		level      int
-	    rlocks	   []*sync.RWMutex
+		level  int
+		rlocks []*sync.RWMutex
 	}
 )
 
@@ -24,7 +24,7 @@ func releaseReadonly(t *readonlyTx) {
 }
 
 func (t *readonlyTx) Log(data interface{}) error {
-	log.Fatal("tx.readonly: cannot log in readonly transaction!")	
+	log.Fatal("tx.readonly: cannot log in readonly transaction!")
 	return errors.New("tx.readonly: cannot log in readonly transaction!")
 }
 
@@ -40,7 +40,7 @@ func (t *readonlyTx) Commit() error {
 	t.level--
 	if t.level == 0 {
 		t.unLock()
-	} 
+	}
 	return nil
 }
 
@@ -64,7 +64,7 @@ func (t *readonlyTx) Lock(m *sync.RWMutex) {
 }
 
 func (t *readonlyTx) unLock() {
-	for _,m := range t.rlocks {
+	for _, m := range t.rlocks {
 		//log.Println("Log ", t.id, " runlocking ", m)
 		m.RUnlock()
 	}

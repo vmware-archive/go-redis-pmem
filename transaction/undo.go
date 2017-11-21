@@ -15,8 +15,8 @@ import (
 	"errors"
 	"log"
 	"reflect"
-	"unsafe"
 	"sync"
+	"unsafe"
 )
 
 type (
@@ -35,22 +35,22 @@ type (
 		undoBuf    logBuffer   // volatile wrapper for log buffer
 		level      int         // tx level
 		undoEntry  entryHeader // volatile entry header
-	    entrySlice []byte      // underlying raw byte slice of undoEntry
-	    rlocks	   []*sync.RWMutex
-	    wlocks	   []*sync.RWMutex
+		entrySlice []byte      // underlying raw byte slice of undoEntry
+		rlocks     []*sync.RWMutex
+		wlocks     []*sync.RWMutex
 	}
 )
 
 const (
-	BUFFERSIZE int = 16*1024
+	BUFFERSIZE int = 16 * 1024
 )
 
 var (
-	pool       chan *undoTx
-	undoOff    uintptr     // offset of undo area
+	pool    chan *undoTx
+	undoOff uintptr // offset of undo area
 )
 
-func initUndo(id int, logArea []byte) *undoTx{
+func initUndo(id int, logArea []byte) *undoTx {
 	t := new(undoTx)
 	t.id = id
 	t.undoHdr = (*undoHeader)(unsafe.Pointer(&logArea[0]))
@@ -84,14 +84,14 @@ func InitUndo(logArea []byte) {
 	// init transaction pool
 	pool = make(chan *undoTx, max)
 	for i := 0; i < max; i++ {
-		begin := len(logArea)/max*i
-		end := len(logArea)/max*(i+1)
+		begin := len(logArea) / max * i
+		end := len(logArea) / max * (i + 1)
 		pool <- initUndo(i, logArea[begin:end])
 	}
 }
 
 func NewUndo() TX {
-	t := <- pool
+	t := <-pool
 	// log.Println("Get log ", t.id)
 	return t
 }
@@ -104,7 +104,7 @@ func releaseUndo(t *undoTx) {
 
 func (t *undoTx) setUndoHdr(tail int) {
 	sfence()
-	t.undoHdr.tail = tail  // atomic update
+	t.undoHdr.tail = tail // atomic update
 	//Persist(unsafe.Pointer(t.undoHdr), int(unsafe.Sizeof(*t.undoHdr)))
 	clflush(unsafe.Pointer(t.undoHdr))
 	sfence()
@@ -126,7 +126,7 @@ func (t *undoTx) Log(data interface{}) error {
 	}
 	ptr := unsafe.Pointer(v.Pointer())
 
-	// Append data to undo log buffer. 
+	// Append data to undo log buffer.
 	_, err := t.undoBuf.Write((*[LOGSIZE]byte)(ptr)[:bytes:bytes])
 	if err != nil {
 		return err
@@ -172,7 +172,7 @@ func (t *undoTx) Commit() error {
 			return errors.New("tx.undo: buffer not correctly parsed when commit!")
 		}
 		t.setUndoHdr(0) // discard all logs.
-	} 
+	}
 	return nil
 }
 
@@ -214,12 +214,12 @@ func (t *undoTx) Lock(m *sync.RWMutex) {
 }
 
 func (t *undoTx) unLock() {
-	for _,m := range t.wlocks {
+	for _, m := range t.wlocks {
 		//log.Println("Log ", t.id, " unlocking ", m)
 		m.Unlock()
 	}
 	t.wlocks = t.wlocks[0:0]
-	for _,m := range t.rlocks {
+	for _, m := range t.rlocks {
 		//log.Println("Log ", t.id, " runlocking ", m)
 		m.RUnlock()
 	}

@@ -36,20 +36,20 @@ func setrangeCommand(c *client) {
 	if err != nil {
 		c.addReplyError([]byte("value is not an integer"))
 	}
-	if (offset < 0) {
-        c.addReplyError([]byte("offset is out of range"))
-        return;
-    }
-    update := c.argv[3]
+	if offset < 0 {
+		c.addReplyError([]byte("offset is out of range"))
+		return
+	}
+	update := c.argv[3]
 	c.db.dict.lockKey(c.tx, c.argv[1])
 	v := c.db.lookupKey(c.argv[1])
 
 	if v == nil {
 		if len(update) == 0 {
-			c.addReply(shared.czero);
-            return;
+			c.addReply(shared.czero)
+			return
 		}
-		newv := make([]byte, offset, offset + len(update)) // TODO: need to allocate in pmem
+		newv := make([]byte, offset, offset+len(update)) // TODO: need to allocate in pmem
 		c.db.setKey(c.tx, c.argv[1], newv)
 		v = newv
 	} else {
@@ -86,7 +86,7 @@ func getrangeCommand(c *client) {
 		c.addReplyError([]byte("value is not an integer"))
 	}
 	end, err := slice2i(c.argv[3])
-	if  err != nil {
+	if err != nil {
 		c.addReplyError([]byte("value is not an integer"))
 	}
 
@@ -113,21 +113,21 @@ func getrangeCommand(c *client) {
 	if start > end || strlen == 0 {
 		c.addReply(shared.emptybulk)
 	} else {
-		c.addReplyBulk(v[start:end+1])
+		c.addReplyBulk(v[start : end+1])
 	}
 }
 
 func mgetCommand(c *client) {
 	c.addReplyMultiBulkLen(c.argc - 1)
 	c.db.dict.lockKeys(c.tx, c.argv[1:], 1)
-	for _, k := range(c.argv[1:]) {
+	for _, k := range c.argv[1:] {
 		v := c.db.lookupKey(k)
 		if v == nil {
 			c.addReply(shared.nullbulk)
 		} else {
 			c.addReplyBulk(v)
 		}
-	} 
+	}
 }
 
 func msetCommand(c *client) {
@@ -139,7 +139,7 @@ func msetnxCommand(c *client) {
 }
 
 func (c *client) msetGeneric(nx bool) {
-	if c.argc % 2 == 0 {
+	if c.argc%2 == 0 {
 		c.addReplyError([]byte("wrong number of arguments for MSET"))
 		return
 	}
@@ -150,12 +150,12 @@ func (c *client) msetGeneric(nx bool) {
 				c.addReply(shared.czero)
 				return
 			}
-		} 
+		}
 	}
 
 	for i := 1; i < c.argc; i += 2 {
 		c.db.setKey(c.tx, c.argv[i], c.argv[i+1])
-	} 
+	}
 	if nx {
 		c.addReply(shared.cone)
 	} else {
@@ -166,26 +166,26 @@ func (c *client) msetGeneric(nx bool) {
 func appendCommand(c *client) {
 	totlen := 0
 	c.db.dict.lockKey(c.tx, c.argv[1])
-    v := c.db.lookupKey(c.argv[1]);
-    if v == nil {
-        /* Create the key */
-        c.db.setKey(c.tx, c.argv[1], c.argv[2])
-        totlen = len(c.argv[2]);
-    } else {
-        /* Append the value */
-        newv := append(v, c.argv[2]...) // TODO: need to create newv in pmem
-        totlen = len(newv)
-        c.db.setKey(c.tx, c.argv[1], newv)
-    }
-    c.addReplyLongLong(totlen);
+	v := c.db.lookupKey(c.argv[1])
+	if v == nil {
+		/* Create the key */
+		c.db.setKey(c.tx, c.argv[1], c.argv[2])
+		totlen = len(c.argv[2])
+	} else {
+		/* Append the value */
+		newv := append(v, c.argv[2]...) // TODO: need to create newv in pmem
+		totlen = len(newv)
+		c.db.setKey(c.tx, c.argv[1], newv)
+	}
+	c.addReplyLongLong(totlen)
 }
 
 func strlenCommand(c *client) {
 	c.db.dict.lockKey(c.tx, c.argv[1])
 
-    v := c.db.lookupKey(c.argv[1])
-    if v == nil {
-    	c.addReply(shared.czero)
-    }
-    c.addReplyLongLong(len(v));
+	v := c.db.lookupKey(c.argv[1])
+	if v == nil {
+		c.addReply(shared.czero)
+	}
+	c.addReplyLongLong(len(v))
 }

@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"pmem/heap"
+	"pmem/redis"
 	"pmem/region"
 	"pmem/transaction"
 	"unsafe"
-	"pmem/redis"
-	"net/http"
-    _ "net/http/pprof"
 )
 
 type Node struct {
@@ -63,24 +63,24 @@ func (l *List) Swizzle(t transaction.TX) {
 
 func main() {
 	/*
-	region.Init("pmem_toyList_example", 8*1024, 11111)
-	var l *List
-	lptr := region.GetRoot()
-	t := transaction.NewUndo()
-	if lptr == nil {
-		// no list created yet
-		fmt.Println("Create an empty list in pmem.")
-		lptr = heap.Alloc(t, int(unsafe.Sizeof(*l)))
-		region.SetRoot(t, lptr)
-	} else {
-		l = (*List)(lptr)
-		fmt.Println("Retrive list in pmem.")
-		l.Swizzle(t)
-		fmt.Println("Add one more node.")
-		l.Insert(t, l.len)
-		l.Show()
-	}
-	transaction.Release(t)
+		region.Init("pmem_toyList_example", 8*1024, 11111)
+		var l *List
+		lptr := region.GetRoot()
+		t := transaction.NewUndo()
+		if lptr == nil {
+			// no list created yet
+			fmt.Println("Create an empty list in pmem.")
+			lptr = heap.Alloc(t, int(unsafe.Sizeof(*l)))
+			region.SetRoot(t, lptr)
+		} else {
+			l = (*List)(lptr)
+			fmt.Println("Retrive list in pmem.")
+			l.Swizzle(t)
+			fmt.Println("Add one more node.")
+			l.Insert(t, l.len)
+			l.Show()
+		}
+		transaction.Release(t)
 	*/
 	go redis.RunServer()
 	http.ListenAndServe(":8080", nil)

@@ -1,9 +1,9 @@
 package transaction
 
 import (
-	"unsafe"
 	"log"
 	"sync"
+	"unsafe"
 )
 
 const (
@@ -39,7 +39,7 @@ func Release(t TX) {
 	default:
 		log.Panic("Releasing unsupported transaction!")
 	}
-} 
+}
 
 // directly persist pmem range
 func Persist(p unsafe.Pointer, s int)

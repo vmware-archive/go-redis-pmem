@@ -1,50 +1,50 @@
 package redis
 
 import (
-	"os"
+	"bufio"
 	"fmt"
 	"net"
-	"time"
-	"bufio"
-	"strconv"
-	_"strings"
+	"os"
 	"pmem/region"
 	"pmem/transaction"
+	"strconv"
+	_ "strings"
+	"time"
 )
 
 type (
 	server struct {
-		db    		*redisDb
-		commands	map[string](*redisCommand)
+		db       *redisDb
+		commands map[string](*redisCommand)
 	}
 
 	redisDb struct {
-		dict 		*dict
-		expire		*dict
+		dict   *dict
+		expire *dict
 	}
 
 	redisCommand struct {
-		name 	string
-		proc 	func(*client)
-		flag	int
+		name string
+		proc func(*client)
+		flag int
 	}
 
 	client struct {
-		s 				*server
-		db       		*redisDb
-		conn     		*net.TCPConn
-		rBuffer			*bufio.Reader
-		wBuffer 		*bufio.Writer
+		s       *server
+		db      *redisDb
+		conn    *net.TCPConn
+		rBuffer *bufio.Reader
+		wBuffer *bufio.Writer
 
-		argc	 		int
-		argv	 		[][]byte
+		argc int
+		argv [][]byte
 
-		querybuf 		[]byte
-		multibulklen 	int
-		bulklen	 		int
+		querybuf     []byte
+		multibulklen int
+		bulklen      int
 
-		cmd 			*redisCommand
-		tx 				transaction.TX
+		cmd *redisCommand
+		tx  transaction.TX
 	}
 
 	sharedObjects struct {
@@ -53,32 +53,32 @@ type (
 )
 
 const (
-	DATASIZE int 	= 32000000
-	UUID 	 int 	= 9524
-	PORT	 string = ":6379"
+	DATASIZE int    = 32000000
+	UUID     int    = 9524
+	PORT     string = ":6379"
 
-	CMD_WRITE int 	= 1
+	CMD_WRITE    int = 1
 	CMD_READONLY int = 2
 )
 
 var (
-	shared 	sharedObjects
+	shared            sharedObjects
 	redisCommandTable = [...]redisCommand{
-		redisCommand{"GET",			getCommand, 		CMD_READONLY},
-		redisCommand{"GETRANGE",	getrangeCommand, 	CMD_READONLY},
-		redisCommand{"MGET",		mgetCommand,		CMD_READONLY},
-		redisCommand{"EXISTS", 		existsCommand, 		CMD_READONLY},
-		redisCommand{"DBSIZE", 		dbsizeCommand, 		CMD_READONLY},
-		redisCommand{"RANDOMKEY",	randomkeyCommand, 	CMD_READONLY},
-		redisCommand{"STRLEN",		strlenCommand, 		CMD_READONLY},
-		redisCommand{"APPEND",		appendCommand,		CMD_WRITE},
-		redisCommand{"SET", 		setCommand, 		CMD_WRITE},
-		redisCommand{"SETRANGE", 	setrangeCommand, 	CMD_WRITE},
-		redisCommand{"GETSET",		getsetCommand,		CMD_WRITE},
-		redisCommand{"MSET",		msetCommand,		CMD_WRITE},
-		redisCommand{"MSETNX",		msetnxCommand,		CMD_WRITE},
-		redisCommand{"DEL", 		delCommand, 		CMD_WRITE},
-		redisCommand{"FLUSHDB",		flushdbCommand,		CMD_WRITE}}
+		redisCommand{"GET", getCommand, CMD_READONLY},
+		redisCommand{"GETRANGE", getrangeCommand, CMD_READONLY},
+		redisCommand{"MGET", mgetCommand, CMD_READONLY},
+		redisCommand{"EXISTS", existsCommand, CMD_READONLY},
+		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
+		redisCommand{"RANDOMKEY", randomkeyCommand, CMD_READONLY},
+		redisCommand{"STRLEN", strlenCommand, CMD_READONLY},
+		redisCommand{"APPEND", appendCommand, CMD_WRITE},
+		redisCommand{"SET", setCommand, CMD_WRITE},
+		redisCommand{"SETRANGE", setrangeCommand, CMD_WRITE},
+		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
+		redisCommand{"MSET", msetCommand, CMD_WRITE},
+		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE},
+		redisCommand{"DEL", delCommand, CMD_WRITE},
+		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE}}
 )
 
 func RunServer() {
@@ -100,13 +100,13 @@ func (s *server) Start() {
 	go s.Cron()
 
 	for {
-        conn, err := listener.AcceptTCP()
-        if err != nil {
-            continue
-        }
-        // run as a goroutine
-        go s.handleClient(conn)
-    }
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			continue
+		}
+		// run as a goroutine
+		go s.handleClient(conn)
+	}
 }
 
 func (s *server) init(path string) {
@@ -120,22 +120,22 @@ func (s *server) init(path string) {
 
 func (s *server) populateCommandTable() {
 	s.commands = make(map[string](*redisCommand))
-	for i, v := range(redisCommandTable) {
+	for i, v := range redisCommandTable {
 		s.commands[v.name] = &redisCommandTable[i]
 	}
 }
 
 func createSharedObjects() {
 	shared = sharedObjects{
-		crlf		: []byte("\r\n"),
-		czero		: []byte(":0\r\n"),
-		cone		: []byte(":1\r\n"),
-		ok          : []byte("+OK\r\n"),
-		nullbulk	: []byte("$-1\r\n"),
-		emptybulk	: []byte("$0\r\n\r\n"),
-		bulkhead	: []byte("$"),
-		inthead		: []byte(":"),
-		arrayhead	: []byte("*")}
+		crlf:      []byte("\r\n"),
+		czero:     []byte(":0\r\n"),
+		cone:      []byte(":1\r\n"),
+		ok:        []byte("+OK\r\n"),
+		nullbulk:  []byte("$-1\r\n"),
+		emptybulk: []byte("$0\r\n\r\n"),
+		bulkhead:  []byte("$"),
+		inthead:   []byte(":"),
+		arrayhead: []byte("*")}
 }
 
 func (s *server) Cron() {
@@ -158,26 +158,26 @@ func (s *server) handleClient(conn *net.TCPConn) {
 	//go c.processOutput()
 }
 
-func (s * server) newClient(conn *net.TCPConn) *client {
-	return 	&client{s  			 : s,
-					db 			 : s.db,
-					conn 		 : conn,
-					rBuffer		 : bufio.NewReader(conn),
-					wBuffer 	 : bufio.NewWriter(conn),
-					argc		 : 0,
-					argv		 : nil,
-					querybuf	 : make([]byte, 1024),
-					multibulklen : 0,
-					bulklen	 	 : -1,
-					cmd 		 : nil,
-					tx 			 : nil,}
+func (s *server) newClient(conn *net.TCPConn) *client {
+	return &client{s: s,
+		db:           s.db,
+		conn:         conn,
+		rBuffer:      bufio.NewReader(conn),
+		wBuffer:      bufio.NewWriter(conn),
+		argc:         0,
+		argv:         nil,
+		querybuf:     make([]byte, 1024),
+		multibulklen: 0,
+		bulklen:      -1,
+		cmd:          nil,
+		tx:           nil}
 }
 
 // Process input buffer and call command.
 func (c *client) processInput() {
-	pos := 0   // current buffer pos for network reading
-	curr := 0  // curr pos of processing
-	finish := false   // finish processing a query
+	pos := 0        // current buffer pos for network reading
+	curr := 0       // curr pos of processing
+	finish := false // finish processing a query
 	for {
 		n, err := c.conn.Read(c.querybuf[pos:])
 		if err != nil {
@@ -198,7 +198,7 @@ func (c *client) processInput() {
 			c.reset()
 			curr, finish = c.processMultibulkBuffer(curr, pos)
 		}
-		
+
 		// rewind query buffer if full.
 		if pos == len(c.querybuf) {
 			copy(c.querybuf, c.querybuf[curr:])
@@ -211,7 +211,7 @@ func (c *client) processInput() {
 // Process RESP array of bulk strings, e.g., "*2\r\n$4\r\nLLEN\r\n$6\r\nmylist\r\n"
 func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 	newline := -1
-	if (c.multibulklen == 0) {
+	if c.multibulklen == 0 {
 		newline = findNewLine(c.querybuf[begin:end])
 		if newline == -1 {
 			return begin, false
@@ -221,7 +221,7 @@ func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 			os.Exit(1)
 		}
 		// has to exclude '*'/'\r' with +1/-1
-		size, err := slice2i(c.querybuf[begin+1:begin+newline-1])
+		size, err := slice2i(c.querybuf[begin+1 : begin+newline-1])
 		fatalError(err)
 		begin += newline + 1
 		if size <= 0 {
@@ -241,14 +241,14 @@ func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 				os.Exit(1)
 			}
 			// has to exclude '$'/'\r' with +1/-1
-			size, err := slice2i(c.querybuf[begin+1:begin+newline-1])
+			size, err := slice2i(c.querybuf[begin+1 : begin+newline-1])
 			fatalError(err)
 			c.bulklen = size
 			begin += newline + 1
 		}
 
 		// read bulk argument
-		if end - begin < c.bulklen + 2 {
+		if end-begin < c.bulklen+2 {
 			// not enough data (+2 == trailing \r\n)
 			return begin, false
 		} else {
@@ -257,11 +257,11 @@ func (c *client) processMultibulkBuffer(begin, end int) (int, bool) {
 			c.argc += 1
 			c.argv = append(c.argv, arg)
 			begin += c.bulklen + 2
-			c.bulklen = -1;
-            c.multibulklen--;
+			c.bulklen = -1
+			c.multibulklen--
 		}
 	}
-	// successuflly process the whole mutlibulk query if reach here 
+	// successuflly process the whole mutlibulk query if reach here
 	return begin, true
 }
 
@@ -292,7 +292,7 @@ func (c *client) processCommand() {
 	if c.cmd == nil {
 		c.notSupported()
 	} else {
-		if c.cmd.flag & CMD_READONLY > 0 {
+		if c.cmd.flag&CMD_READONLY > 0 {
 			c.tx = transaction.NewReadonly()
 		} else {
 			c.tx = transaction.NewUndo()
@@ -312,7 +312,7 @@ func (c *client) lookupCommand() {
 
 func (c *client) notSupported() {
 	fmt.Println("Command not supported!")
-	for _,q := range c.argv {
+	for _, q := range c.argv {
 		fmt.Print(string(q), " ")
 	}
 }
@@ -352,10 +352,10 @@ func (c *client) cleanup() {
 }
 
 func fatalError(err error) {
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
-        os.Exit(1)
-    }
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
 }
 
 func getClient() net.Conn {

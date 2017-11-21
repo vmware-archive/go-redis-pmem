@@ -2,8 +2,8 @@ package transaction
 
 import (
 	"fmt"
-	"testing"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -134,9 +134,9 @@ func TestConcurrentLog(t *testing.T) {
 	m2 := new(sync.RWMutex)
 	Init(make([]byte, LOGSIZE))
 	fmt.Println("Before:", s1.i, s2.i)
-	for i:=0; i<100; i++ {
+	for i := 0; i < 100; i++ {
 		go func(i int) {
-			time.Sleep(time.Duration(1)*time.Second)
+			time.Sleep(time.Duration(1) * time.Second)
 			undo := NewUndo()
 			undo.Begin()
 			undo.WLock(m1)
@@ -150,7 +150,7 @@ func TestConcurrentLog(t *testing.T) {
 			Release(undo)
 		}(i)
 	}
-	time.Sleep(time.Duration(3)*time.Second)
+	time.Sleep(time.Duration(3) * time.Second)
 	assertEqual(t, s1.i, s2.i)
 }
 
