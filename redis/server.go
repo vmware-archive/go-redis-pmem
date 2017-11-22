@@ -9,7 +9,7 @@ import (
 	"pmem/transaction"
 	"strconv"
 	_ "strings"
-	"time"
+	_ "time"
 )
 
 type (
@@ -143,15 +143,7 @@ func createSharedObjects() {
 }
 
 func (s *server) Cron() {
-	undoTx := transaction.NewUndo()
-	for {
-		time.Sleep(1 * time.Millisecond)
-		needRehash := s.db.dict.Rehash(undoTx, 50)
-		if !needRehash {
-			s.db.dict.ResizeIfNeeded(undoTx)
-		}
-		//transaction.Release(undoTx)
-	}
+	go s.db.Cron()
 }
 
 func (s *server) handleClient(conn *net.TCPConn) {

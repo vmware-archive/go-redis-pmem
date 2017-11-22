@@ -10,13 +10,14 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 	"unsafe"
 )
 
 const (
 	DictInitSize   = 1024
 	Ratio          = 2
-	BucketPerShard = 128
+	BucketPerShard = 64
 )
 
 var (
@@ -28,7 +29,7 @@ type (
 		lock *sync.RWMutex
 		tab  [2]table
 
-		rehashlock *sync.RWMutex
+		rehashLock *sync.RWMutex
 		rehashIdx  int
 	}
 
@@ -53,9 +54,9 @@ func NewDict(tx transaction.TX) *dict {
 	tx.Begin()
 	tx.Log(d)
 	d.lock = new(sync.RWMutex)
+	d.rehashLock = new(sync.RWMutex)
 	d.resetTable(tx, 0, DictInitSize)
 	d.resetTable(tx, 1, 0)
-	d.rehashlock = new(sync.RWMutex)
 	d.rehashIdx = -1
 	tx.Commit()
 	return d
@@ -234,60 +235,85 @@ func (d *dict) Del(undoTx transaction.TX, key []byte) bool {
 	return deleted
 }
 
-func (d *dict) Rehash(undoTx transaction.TX, n int) bool {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.WLock(d.lock)
-
-	if d.rehashIdx < 0 {
-		return false
-	}
-
-	maxvisit := n * 10
-
-	undoTx.Log(d)
-	for n > 0 && d.rehashIdx <= d.tab[0].mask {
-		if maxvisit--; maxvisit == 0 {
-			break
+// rehash and resize
+func (d *dict) Cron(sleep time.Duration) {
+	tx := transaction.NewUndo()
+	var used, size0, size1 int
+	for {
+		if size1 == 0 {
+			time.Sleep(sleep) // reduce cpu consumption and lock contention
 		}
-
-		e := d.tab[0].bucket[d.rehashIdx]
-		if e != nil {
-			undoTx.Log(d.tab[0].bucket[d.rehashIdx : d.rehashIdx+1])
-			for n > 0 && e != nil {
-				next := e.next
-				i := d.hashKey(e.key) & d.tab[1].mask
-				undoTx.Log(e)
-				e.next = d.tab[1].bucket[i]
-				undoTx.Log(d.tab[1].bucket[i : i+1])
-				d.tab[1].bucket[i] = e
-
-				s0 := shard(d.rehashIdx)
-				s1 := shard(i)
-				undoTx.Log(d.tab[0].used[s0 : s0+1])
-				d.tab[0].used[s0]--
-				undoTx.Log(d.tab[1].used[s1 : s1+1])
-				d.tab[1].used[s1]++
-
-				e = next
-				n--
+		tx.Begin()
+		tx.WLock(d.rehashLock)
+		if d.rehashIdx < 0 {
+			// check whether need to resize table when rehashIdx < 0
+			used, size0, size1 = d.resizeIfNeeded(tx)
+			if size1 > 0 {
+				fmt.Println("Dictionary used", used, "Resize table to", size1)
 			}
-			d.tab[0].bucket[d.rehashIdx] = e
-		}
-		if e == nil {
-			d.rehashIdx++
-		}
-	}
+		} else if d.rehashIdx < size0 {
+			// rehash, one key each time
+			tx.RLock(d.lock)
+			d.lockShard(tx, 0, shard(d.rehashIdx)) // lock bucket in tab[0]
+			e := d.tab[0].bucket[d.rehashIdx]
+			if e == nil {
+				tx.Log(d.rehashIdx)
+				d.rehashIdx++
+			} else {
+				i0 := d.rehashIdx
+				i1 := d.hashKey(e.key) & (size1 - 1)
+				s0 := shard(i0)
+				s1 := shard(i1)
 
-	if d.rehashIdx > d.tab[0].mask {
-		d.tab[0] = d.tab[1]
-		d.resetTable(undoTx, 1, 0)
-		d.rehashIdx = -1
-		fmt.Println("Rehash finished!")
-	}
+				d.lockShard(tx, 1, s1)
+				tx.Log(e)
+				tx.Log(d.tab[0].bucket[i0 : i0+1])
+				tx.Log(d.tab[1].bucket[i1 : i1+1])
+				tx.Log(d.tab[0].used[s0 : s0+1])
+				tx.Log(d.tab[1].used[s1 : s1+1])
 
-	return d.rehashIdx >= 0
+				next := e.next
+				e.next = d.tab[1].bucket[i1]
+				d.tab[0].bucket[i0] = next
+				d.tab[0].used[s0]--
+				d.tab[1].bucket[i1] = e
+				d.tab[1].used[s1]++
+			}
+		} else {
+			// rehash finished, reset table
+			tx.WLock(d.lock)
+			tx.Log(d)
+			d.tab[0] = d.tab[1]
+			d.resetTable(tx, 1, 0)
+			d.rehashIdx = -1
+			size1 = 0
+			fmt.Println("Rehash finished!")
+		}
+		tx.Commit()
+	}
+}
+
+func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
+	tx.WLock(d.lock)
+
+	size0 = len(d.tab[0].bucket)
+	used = d.size()
+
+	if used > size0 {
+		return used, size0, d.resize(tx, used)
+	} else if size0 > DictInitSize && used < size0/Ratio {
+		return used, size0, d.resize(tx, used)
+	} else {
+		return used, size0, 0
+	}
+}
+
+func (d *dict) resize(tx transaction.TX, s int) int {
+	s = d.nextPower(s)
+
+	d.resetTable(tx, 1, s)
+	d.rehashIdx = 0
+	return s
 }
 
 func (d *dict) nextPower(s int) int {
@@ -296,40 +322,6 @@ func (d *dict) nextPower(s int) int {
 		i *= 2
 	}
 	return i
-}
-
-func (d *dict) resize(undoTx transaction.TX, s int) {
-	s = d.nextPower(s)
-
-	undoTx.Log(d)
-	d.resetTable(undoTx, 1, s)
-	d.rehashIdx = 0
-	//fmt.Println("Dict used", d.tab[0].used, "Resized to", s)
-}
-
-func (d *dict) ResizeIfNeeded(undoTx transaction.TX) {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.WLock(d.lock)
-	rehashIdx := d.rehashIdx
-
-	if rehashIdx < 0 {
-		size := d.tab[0].mask + 1
-		used := 0
-		for i := 0; i < shard(size); i++ {
-			used += d.tab[0].used[i]
-		}
-		if used > size {
-			fmt.Println("Dict size < used, expanding table!", size, used)
-			d.resize(undoTx, used*2)
-			return
-		}
-		if size > DictInitSize && used < size/Ratio {
-			d.resize(undoTx, used)
-			return
-		}
-	}
 }
 
 func (d *dict) lockKey(tx transaction.TX, key []byte) {
@@ -385,10 +377,6 @@ func (d *dict) lockAllKeys(tx transaction.TX) {
 			d.lockShard(tx, t, s)
 		}
 	}
-}
-
-func (d *dict) lockTables(tx transaction.TX) {
-	tx.WLock(d.lock)
 }
 
 func (d *dict) findShard(t int, key []byte) int {
