@@ -48,7 +48,7 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, czero, cone, ok, nullbulk, emptybulk, bulkhead, inthead, arrayhead []byte
+		crlf, czero, cone, ok, nullbulk, emptybulk, syntaxerr, bulkhead, inthead, arrayhead []byte
 	}
 )
 
@@ -71,8 +71,13 @@ var (
 		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
 		redisCommand{"RANDOMKEY", randomkeyCommand, CMD_READONLY},
 		redisCommand{"STRLEN", strlenCommand, CMD_READONLY},
+		redisCommand{"TTL", ttlCommand, CMD_READONLY},
+		redisCommand{"PTTL", pttlCommand, CMD_READONLY},
 		redisCommand{"APPEND", appendCommand, CMD_WRITE},
 		redisCommand{"SET", setCommand, CMD_WRITE},
+		redisCommand{"SETNX", setnxCommand, CMD_WRITE},
+		redisCommand{"SETEX", setexCommand, CMD_WRITE},
+		redisCommand{"PSETEX", psetexCommand, CMD_WRITE},
 		redisCommand{"SETRANGE", setrangeCommand, CMD_WRITE},
 		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
 		redisCommand{"MSET", msetCommand, CMD_WRITE},
@@ -82,7 +87,8 @@ var (
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
 		redisCommand{"EXPIREAT", expireatCommand, CMD_WRITE},
 		redisCommand{"PEXPIRE", pexpireCommand, CMD_WRITE},
-		redisCommand{"PEXPIREAT", pexpireatCommand, CMD_WRITE}}
+		redisCommand{"PEXPIREAT", pexpireatCommand, CMD_WRITE},
+		redisCommand{"PERSIST", persistCommand, CMD_WRITE}}
 )
 
 func RunServer() {
@@ -137,6 +143,7 @@ func createSharedObjects() {
 		ok:        []byte("+OK\r\n"),
 		nullbulk:  []byte("$-1\r\n"),
 		emptybulk: []byte("$0\r\n\r\n"),
+		syntaxerr: []byte("-ERR syntax error\r\n"),
 		bulkhead:  []byte("$"),
 		inthead:   []byte(":"),
 		arrayhead: []byte("*")}
@@ -341,6 +348,22 @@ func (c *client) addReplyError(err []byte) {
 	c.wBuffer.Write([]byte("-ERR "))
 	c.wBuffer.Write(err)
 	c.wBuffer.Write(shared.crlf)
+}
+
+func (c *client) getLongLongFromObjectOrReply(o, msg []byte) (int64, error) {
+	i, err := getLongLongFromObject(o)
+	if err != nil {
+		if msg != nil {
+			c.addReplyError(msg)
+		} else {
+			c.addReplyError([]byte("value is not an integer or out of range"))
+		}
+	}
+	return i, err
+}
+
+func getLongLongFromObject(o []byte) (int64, error) {
+	return strconv.ParseInt(string(o), 10, 64)
 }
 
 func (c *client) cleanup() {

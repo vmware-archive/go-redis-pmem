@@ -1,6 +1,7 @@
 package redis
 
 import (
+	_ "fmt"
 	"pmem/transaction"
 	"strconv"
 	"time"
@@ -39,6 +40,7 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 				when, _ := slice2i(e.value)
 				now := int(time.Now().UnixNano())
 				if when <= now {
+					// fmt.Println("remove expire", string(e.key), when, now)
 					db.dict.lockKey(tx, e.key)
 					db.delete(tx, e.key)
 				}
@@ -216,7 +218,7 @@ func expireGeneric(c *client, base time.Time, d time.Duration) {
 		c.addReply(shared.cone)
 		return
 	} else {
-		c.db.setExpire(c.tx, c.argv[1], []byte(strconv.Itoa(int(expire.UnixNano())))) // TODO: directly store time in expire dict when support multiple types as value
+		c.db.setExpire(c.tx, c.argv[1], strconv.AppendInt(nil, expire.UnixNano(), 10)) // TODO: directly store time in expire dict when support multiple types as value
 		c.addReply(shared.cone)
 		return
 	}
@@ -254,10 +256,62 @@ func (db *redisDb) getExpire(key []byte) int64 { // TODO: directly use time stru
 		return -1
 	}
 
-	when, err := slice2i(e.value)
+	when, err := strconv.ParseInt(string(e.value), 10, 64)
 	if err != nil {
 		panic("Expire value is not int!")
 	}
 
-	return int64(when)
+	return when
+}
+
+func ttlCommand(c *client) {
+	ttlGeneric(c, false)
+}
+
+func pttlCommand(c *client) {
+	ttlGeneric(c, true)
+}
+
+func ttlGeneric(c *client, ms bool) {
+	var ttl int64 = -1
+
+	c.db.expire.lockKey(c.tx, c.argv[1])
+	c.db.dict.lockKey(c.tx, c.argv[1])
+
+	if c.db.lookupKeyRead(c.tx, c.argv[1]) == nil {
+		c.addReplyLongLong(-2)
+		return
+	}
+
+	expire := c.db.getExpire(c.argv[1])
+	if expire != -1 {
+		ttl = expire - time.Now().UnixNano()
+		if ttl < 0 {
+			ttl = 0
+		}
+	}
+	if ttl == -1 {
+		c.addReplyLongLong(-1)
+	} else {
+		if ms {
+			ttl = ttl / 1000000
+		} else {
+			ttl = ttl / 1000000000
+		}
+		c.addReplyLongLong(int(ttl))
+	}
+}
+
+func persistCommand(c *client) {
+	c.db.lockKeyWrite(c.tx, c.argv[1])
+	_, _, _, e := c.db.dict.find(c.argv[1])
+	if e == nil {
+		c.addReply(shared.czero)
+	} else {
+		if c.db.removeExpire(c.tx, c.argv[1]) {
+			c.addReply(shared.cone)
+		} else {
+			c.addReply(shared.czero)
+		}
+	}
 }

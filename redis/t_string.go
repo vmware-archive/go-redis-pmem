@@ -3,12 +3,101 @@ package redis
 import (
 	_ "fmt"
 	_ "pmem/transaction"
+	"strconv"
+	"time"
 )
 
+const (
+	OBJ_SET_NO_FLAGS = 0
+	OBJ_SET_NX       = 1 << 0
+	OBJ_SET_XX       = 1 << 1
+	OBJ_SET_EX       = 1 << 2
+	OBJ_SET_PX       = 1 << 3
+)
+
+// SET key value [NX] [XX] [EX <seconds>] [PX <milliseconds>]
 func setCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	c.db.setKey(c.tx, c.argv[1], c.argv[2])
-	c.addReply(shared.ok)
+	ms := false
+	var expire []byte
+	flags := OBJ_SET_NO_FLAGS
+
+	for i := 3; i < c.argc; i++ {
+		curr := c.argv[i]
+		var next []byte
+		if i < c.argc-1 {
+			next = c.argv[i+1]
+		}
+		if (curr[0] == 'n' || curr[0] == 'N') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_XX) == 0 {
+			flags |= OBJ_SET_NX
+		} else if (curr[0] == 'x' || curr[0] == 'X') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_NX) == 0 {
+			flags |= OBJ_SET_XX
+		} else if (curr[0] == 'e' || curr[0] == 'E') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_PX) == 0 {
+			flags |= OBJ_SET_EX
+			expire = next
+			i++
+		} else if (curr[0] == 'p' || curr[0] == 'P') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_EX) == 0 {
+			flags |= OBJ_SET_PX
+			ms = true
+			expire = next
+			i++
+		} else {
+			c.addReply(shared.syntaxerr)
+			return
+		}
+	}
+	c.setGeneric(flags, c.argv[1], c.argv[2], expire, ms, nil, nil)
+}
+
+func setnxCommand(c *client) {
+	c.setGeneric(OBJ_SET_NX, c.argv[1], c.argv[2], nil, false, shared.cone, shared.czero)
+}
+
+func setexCommand(c *client) {
+	c.setGeneric(OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], false, nil, nil)
+}
+
+func psetexCommand(c *client) {
+	c.setGeneric(OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], true, nil, nil)
+}
+
+func (c *client) setGeneric(flags int, key, val []byte, expire []byte, ms bool, okReply, abortReply []byte) {
+	var ns int64 = -1
+	if expire != nil {
+		t, err := c.getLongLongFromObjectOrReply(expire, nil)
+		if err != nil {
+			return
+		}
+		if t <= 0 {
+			c.addReplyError([]byte("invalid expire time"))
+			return
+		}
+		if ms {
+			ns = t * 1000000
+		} else {
+			ns = t * 1000000000
+		}
+	}
+
+	c.db.lockKeyWrite(c.tx, key)
+	if ((flags&OBJ_SET_NX) > 0 && c.db.lookupKeyWrite(c.tx, key) != nil) || ((flags&OBJ_SET_XX) > 0 && c.db.lookupKeyWrite(c.tx, key) == nil) {
+		if abortReply != nil {
+			c.addReply(abortReply)
+		} else {
+			c.addReply(shared.nullbulk)
+		}
+		return
+	}
+	c.db.setKey(c.tx, key, val)
+	if expire != nil {
+		when := time.Now().UnixNano() + ns
+		c.db.setExpire(c.tx, key, strconv.AppendInt(nil, when, 10))
+	}
+
+	if okReply != nil {
+		c.addReply(okReply)
+	} else {
+		c.addReply(shared.ok)
+	}
 }
 
 func getCommand(c *client) {
@@ -69,6 +158,9 @@ func setrangeCommand(c *client) {
 	} else {
 		needed := offset + len(update)
 		if needed > len(v) {
+			if offset > len(v) {
+				v = append(v, make([]byte, offset-len(v))...) // TODO: need to allocate in pmem
+			}
 			newv := append(v[:offset], update...) // TODO: need to allocate in pmem
 			c.db.setKey(c.tx, c.argv[1], newv)
 			c.addReplyLongLong(needed)
