@@ -122,7 +122,7 @@ func (s *server) Start() {
 func (s *server) init(path string) {
 	region.Init(path, DATASIZE, UUID)
 	tx := transaction.NewUndo()
-	s.db = &redisDb{NewDict(tx), NewDict(tx)}
+	s.db = &redisDb{NewDict(tx, 1024, 32), NewDict(tx, 128, 1)}
 	transaction.Release(tx)
 	s.populateCommandTable()
 	createSharedObjects()

@@ -101,8 +101,11 @@ func (c *client) setGeneric(flags int, key, val []byte, expire []byte, ms bool, 
 }
 
 func getCommand(c *client) {
-	c.db.lockKeyRead(c.tx, c.argv[1])
-	c.getGeneric()
+	if c.db.lockKeyRead(c.tx, c.argv[1]) {
+		c.getGeneric()
+	} else { // expired
+		c.addReply(shared.nullbulk)
+	}
 }
 
 func getsetCommand(c *client) {
@@ -182,8 +185,11 @@ func getrangeCommand(c *client) {
 		c.addReplyError([]byte("value is not an integer"))
 	}
 
-	c.db.lockKeyRead(c.tx, c.argv[1])
-	v := c.db.lookupKeyRead(c.tx, c.argv[1])
+	var v []byte
+	if c.db.lockKeyRead(c.tx, c.argv[1]) {
+		v = c.db.lookupKeyRead(c.tx, c.argv[1])
+	}
+
 	strlen := len(v)
 
 	if start < 0 {
@@ -211,9 +217,12 @@ func getrangeCommand(c *client) {
 
 func mgetCommand(c *client) {
 	c.addReplyMultiBulkLen(c.argc - 1)
-	c.db.lockKeysRead(c.tx, c.argv[1:], 1)
-	for _, k := range c.argv[1:] {
-		v := c.db.lookupKeyRead(c.tx, k)
+	alives := c.db.lockKeysRead(c.tx, c.argv[1:], 1)
+	for i, k := range c.argv[1:] {
+		var v []byte
+		if alives[i] {
+			v = c.db.lookupKeyRead(c.tx, k)
+		}
 		if v == nil {
 			c.addReply(shared.nullbulk)
 		} else {
@@ -273,9 +282,12 @@ func appendCommand(c *client) {
 }
 
 func strlenCommand(c *client) {
-	c.db.lockKeyRead(c.tx, c.argv[1])
+	var v []byte
 
-	v := c.db.lookupKeyRead(c.tx, c.argv[1])
+	if c.db.lockKeyRead(c.tx, c.argv[1]) {
+		v = c.db.lookupKeyRead(c.tx, c.argv[1])
+	}
+
 	if v == nil {
 		c.addReply(shared.czero)
 	}

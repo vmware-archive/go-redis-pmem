@@ -56,7 +56,7 @@ func setup() transaction.TX {
 	transaction.Init(logSlice)
 	undoTx := transaction.NewUndo()
 	heap.Init(undoTx, heapSlice, 100000000)
-	d = NewDict(undoTx)
+	d = NewDict(undoTx, 4, 1)
 	return undoTx
 }
 

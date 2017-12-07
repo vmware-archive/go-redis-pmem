@@ -29,24 +29,28 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 		tx.RLock(db.expire.lock)
 		mask := db.expire.tab[0].mask
 		i = i & mask
-		s := shard(i)
+		s := db.expire.shard(i)
 		db.expire.lockShard(tx, 0, s)
 		u := db.expire.tab[0].used[s]
 		if u == 0 {
-			i = shard(i+BucketPerShard) * BucketPerShard
+			i = db.expire.shard(i+db.expire.bucketPerShard) * db.expire.bucketPerShard
 		} else {
 			e := db.expire.tab[0].bucket[i]
 			for e != nil {
-				when, _ := slice2i(e.value)
-				now := int(time.Now().UnixNano())
+				when, _ := strconv.ParseInt(string(e.value), 10, 64)
+				now := time.Now().UnixNano()
 				if when <= now {
 					// fmt.Println("remove expire", string(e.key), when, now)
 					db.dict.lockKey(tx, e.key)
 					db.delete(tx, e.key)
+					e = e.next
+					break // only delete one expire key in each transaction to prevent deadlock.
 				}
 				e = e.next
 			}
-			i++
+			if e == nil { // finished checking current bucket
+				i++
+			}
 		}
 		tx.Commit()
 		time.Sleep(sleep) // reduce cpu consumption and lock contention
@@ -56,11 +60,13 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 func existsCommand(c *client) {
 	count := 0
 
-	c.db.lockKeysRead(c.tx, c.argv[1:], 1)
+	alive := c.db.lockKeysRead(c.tx, c.argv[1:], 1)
 
-	for _, key := range c.argv[1:] {
-		if c.db.lookupKeyRead(c.tx, key) != nil {
-			count++
+	for i, key := range c.argv[1:] {
+		if alive[i] {
+			if c.db.lookupKeyRead(c.tx, key) != nil {
+				count++
+			}
 		}
 	}
 	c.addReplyLongLong(count)
@@ -106,9 +112,10 @@ func (db *redisDb) lockKeyWrite(tx transaction.TX, key []byte) {
 	db.dict.lockKey(tx, key)
 }
 
-func (db *redisDb) lockKeyRead(tx transaction.TX, key []byte) {
-	db.handleExpireKey(key) // may remove this for better performance but relaxed expire guarantee
+func (db *redisDb) lockKeyRead(tx transaction.TX, key []byte) bool {
+	db.expire.lockKey(tx, key)
 	db.dict.lockKey(tx, key)
+	return db.checkLiveKey(key)
 }
 
 func (db *redisDb) lockKeysWrite(tx transaction.TX, keys [][]byte, stride int) {
@@ -116,9 +123,10 @@ func (db *redisDb) lockKeysWrite(tx transaction.TX, keys [][]byte, stride int) {
 	db.dict.lockKeys(tx, keys, stride)
 }
 
-func (db *redisDb) lockKeysRead(tx transaction.TX, keys [][]byte, stride int) {
-	db.handleExpireKeys(keys, stride) // may remove this for better performance but relaxed expire guarantee
+func (db *redisDb) lockKeysRead(tx transaction.TX, keys [][]byte, stride int) []bool {
+	db.expire.lockKeys(tx, keys, stride)
 	db.dict.lockKeys(tx, keys, stride)
+	return db.checkLiveKeys(keys, stride)
 }
 
 func (db *redisDb) lockTablesWrite(tx transaction.TX) {
@@ -128,22 +136,24 @@ func (db *redisDb) lockTablesWrite(tx transaction.TX) {
 	tx.WLock(db.dict.lock)
 }
 
-// called by readonly commands before any command lock acquires and operations.
-func (db *redisDb) handleExpireKeys(keys [][]byte, stride int) {
+func (db *redisDb) checkLiveKeys(keys [][]byte, stride int) []bool {
+	alive := make([]bool, len(keys))
 	for i := 0; i < len(keys)/stride; i++ {
-		db.handleExpireKey(keys[i*stride])
+		alive[i*stride] = db.checkLiveKey(keys[i*stride])
 	}
+	return alive
 }
 
-// expire of each key can be considered a separate transaction.
-func (db *redisDb) handleExpireKey(key []byte) {
-	tx := transaction.NewUndo()
-	tx.Begin()
-	db.expire.lockKey(tx, key)
-	db.dict.lockKey(tx, key)
-	db.expireIfNeeded(tx, key)
-	tx.Commit()
-	transaction.Release(tx)
+func (db *redisDb) checkLiveKey(key []byte) bool {
+	when := db.getExpire(key)
+	if when < 0 {
+		return true
+	}
+	now := time.Now().UnixNano()
+	if now < when {
+		return true
+	}
+	return false
 }
 
 func (db *redisDb) lookupKeyWrite(tx transaction.TX, key []byte) []byte {

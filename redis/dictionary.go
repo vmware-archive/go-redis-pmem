@@ -15,9 +15,7 @@ import (
 )
 
 const (
-	DictInitSize   = 1024
-	Ratio          = 2
-	BucketPerShard = 64
+	Ratio = 2
 )
 
 var (
@@ -31,6 +29,9 @@ type (
 
 		rehashLock *sync.RWMutex
 		rehashIdx  int
+
+		initSize       int
+		bucketPerShard int
 	}
 
 	table struct {
@@ -47,15 +48,17 @@ type (
 	}
 )
 
-func NewDict(tx transaction.TX) *dict {
+func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	// should be replaced with pNew(dict)
 	d := new(dict)
 
 	tx.Begin()
 	tx.Log(d)
+	d.initSize = nextPower(1, initSize)
+	d.bucketPerShard = bucketPerShard
 	d.lock = new(sync.RWMutex)
 	d.rehashLock = new(sync.RWMutex)
-	d.resetTable(tx, 0, DictInitSize)
+	d.resetTable(tx, 0, d.initSize)
 	d.resetTable(tx, 1, 0)
 	d.rehashIdx = -1
 	tx.Commit()
@@ -69,7 +72,7 @@ func (d *dict) resetTable(tx transaction.TX, i int, s int) {
 		d.tab[i].bucket = nil
 		d.tab[i].used = nil
 	} else {
-		shards := shard(s)
+		shards := d.shard(s)
 		d.tab[i].bucketlock = make([]sync.RWMutex, shards)
 		d.tab[i].bucket = make([]*entry, s)
 		d.tab[i].used = make([]int, shards)
@@ -78,16 +81,8 @@ func (d *dict) resetTable(tx transaction.TX, i int, s int) {
 }
 
 // get the shard number of a bucket id
-func shard(b int) int {
-	return b / BucketPerShard
-}
-
-func newLocks(n int) (l []*sync.RWMutex) {
-	l = make([]*sync.RWMutex, n)
-	for i, _ := range l {
-		l[i] = new(sync.RWMutex)
-	}
-	return l
+func (d *dict) shard(b int) int {
+	return b / d.bucketPerShard
 }
 
 func (d *dict) hashKey(key []byte) int {
@@ -121,10 +116,10 @@ func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, i
 	for t = 0; t <= maxt; t++ {
 		i = h & d.tab[t].mask
 		if readOnly {
-			undoTx.RLock(&d.tab[t].bucketlock[shard(i)])
+			undoTx.RLock(&d.tab[t].bucketlock[d.shard(i)])
 			//undoTx.RLock(d.tab[t].lock)
 		} else {
-			undoTx.WLock(&d.tab[t].bucketlock[shard(i)])
+			undoTx.WLock(&d.tab[t].bucketlock[d.shard(i)])
 			//undoTx.WLock(d.tab[t].lock)
 		}
 		curr = d.tab[t].bucket[i]
@@ -148,7 +143,7 @@ func (d *dict) Used(undoTx transaction.TX) int {
 	u := 0
 	for _, t := range d.tab {
 		if t.used != nil {
-			s := shard(t.mask + 1)
+			s := d.shard(t.mask + 1)
 			for i := 0; i <= s; i++ {
 				undoTx.RLock(&t.bucketlock[i])
 				u += t.used[i]
@@ -189,7 +184,7 @@ func (d *dict) Set(undoTx transaction.TX, key, value []byte) (int, int, float64)
 		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
 		undoTx.Log(d.tab[t].bucket[i : i+1])
 		d.tab[t].bucket[i] = e2
-		s := shard(i)
+		s := d.shard(i)
 		undoTx.Log(d.tab[t].used[s : s+1])
 		d.tab[t].used[s]++
 		return 1, 0, c
@@ -227,7 +222,7 @@ func (d *dict) Del(undoTx transaction.TX, key []byte) bool {
 			d.tab[t].bucket[i] = e.next
 		}
 
-		s := shard(i)
+		s := d.shard(i)
 		undoTx.Log(d.tab[t].used[s : s+1])
 		d.tab[t].used[s]--
 		deleted = true
@@ -254,7 +249,7 @@ func (d *dict) Cron(sleep time.Duration) {
 		} else if d.rehashIdx < size0 {
 			// rehash, one key each time
 			tx.RLock(d.lock)
-			d.lockShard(tx, 0, shard(d.rehashIdx)) // lock bucket in tab[0]
+			d.lockShard(tx, 0, d.shard(d.rehashIdx)) // lock bucket in tab[0]
 			e := d.tab[0].bucket[d.rehashIdx]
 			if e == nil {
 				tx.Log(d.rehashIdx)
@@ -262,8 +257,8 @@ func (d *dict) Cron(sleep time.Duration) {
 			} else {
 				i0 := d.rehashIdx
 				i1 := d.hashKey(e.key) & (size1 - 1)
-				s0 := shard(i0)
-				s1 := shard(i1)
+				s0 := d.shard(i0)
+				s1 := d.shard(i1)
 
 				d.lockShard(tx, 1, s1)
 				tx.Log(e)
@@ -301,7 +296,7 @@ func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
 
 	if used > size0 {
 		return used, size0, d.resize(tx, used)
-	} else if size0 > DictInitSize && used < size0/Ratio {
+	} else if size0 > d.initSize && used < size0/Ratio {
 		return used, size0, d.resize(tx, used)
 	} else {
 		return used, size0, 0
@@ -309,19 +304,21 @@ func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
 }
 
 func (d *dict) resize(tx transaction.TX, s int) int {
-	s = d.nextPower(s)
+	s = nextPower(d.initSize, s)
 
 	d.resetTable(tx, 1, s)
 	d.rehashIdx = 0
 	return s
 }
 
-func (d *dict) nextPower(s int) int {
-	i := DictInitSize
-	for i < s {
-		i *= 2
+func nextPower(s1, s2 int) int {
+	if s1 < 1 {
+		s1 = 1
 	}
-	return i
+	for s1 < s2 {
+		s1 *= 2
+	}
+	return s1
 }
 
 func (d *dict) lockKey(tx transaction.TX, key []byte) {
@@ -373,14 +370,14 @@ func (d *dict) lockAllKeys(tx transaction.TX) {
 	}
 
 	for t := 0; t <= maxt; t++ {
-		for s := 0; s < shard(d.tab[t].mask+1); s++ {
+		for s := 0; s < d.shard(d.tab[t].mask+1); s++ {
 			d.lockShard(tx, t, s)
 		}
 	}
 }
 
 func (d *dict) findShard(t int, key []byte) int {
-	return shard(d.hashKey(key) & d.tab[t].mask)
+	return d.shard(d.hashKey(key) & d.tab[t].mask)
 }
 
 func (d *dict) lockShard(tx transaction.TX, t, s int) {
@@ -440,7 +437,7 @@ func (d *dict) set(tx transaction.TX, key, value []byte) (insert bool) {
 		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
 		tx.Log(d.tab[t].bucket[b : b+1])
 		d.tab[t].bucket[b] = e2
-		s := shard(b)
+		s := d.shard(b)
 		tx.Log(d.tab[t].used[s : s+1])
 		d.tab[t].used[s]++
 		return true
@@ -459,7 +456,7 @@ func (d *dict) delete(tx transaction.TX, key []byte) (deleted bool) {
 			d.tab[t].bucket[b] = e.next
 		}
 
-		s := shard(b)
+		s := d.shard(b)
 		tx.Log(d.tab[t].used[s : s+1])
 		d.tab[t].used[s]--
 		deleted = true
@@ -480,7 +477,7 @@ func (d *dict) size() int {
 }
 
 func (d *dict) empty(tx transaction.TX) {
-	d.resetTable(tx, 0, DictInitSize)
+	d.resetTable(tx, 0, d.initSize)
 	d.resetTable(tx, 1, 0)
 	tx.Log(d.rehashIdx)
 	d.rehashIdx = -1
