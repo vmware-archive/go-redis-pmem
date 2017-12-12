@@ -42,7 +42,7 @@ type (
 )
 
 const (
-	BUFFERSIZE int = 16 * 1024
+	BUFFERSIZE int = 8 * 1024
 )
 
 var (
@@ -68,7 +68,7 @@ func initUndo(id int, logArea []byte) *undoTx {
 
 	ptr := unsafe.Pointer(&t.undoEntry)
 	size := unsafe.Sizeof(t.undoEntry)
-	t.entrySlice = (*[LOGSIZE]byte)(ptr)[:size:size]
+	t.entrySlice = (*[BUFFERSIZE]byte)(ptr)[:size:size]
 	// pre allocate some space for holding locks
 	t.wlocks = make([]*sync.RWMutex, 0, 3)
 	t.rlocks = make([]*sync.RWMutex, 0, 3)
@@ -81,6 +81,9 @@ func InitUndo(logArea []byte) {
 	undoOff = uintptr(unsafe.Pointer(&logArea[0]))
 
 	max := len(logArea) / BUFFERSIZE
+	if max == 0 {
+		log.Fatal("Not enough log area for initializing undo log! ", len(logArea))
+	}
 	// init transaction pool
 	pool = make(chan *undoTx, max)
 	for i := 0; i < max; i++ {
@@ -91,6 +94,9 @@ func InitUndo(logArea []byte) {
 }
 
 func NewUndo() TX {
+	if pool == nil {
+		log.Fatal("Undo log not correctly initialized!")
+	}
 	t := <-pool
 	// log.Println("Get log ", t.id)
 	return t
@@ -127,7 +133,7 @@ func (t *undoTx) Log(data interface{}) error {
 	ptr := unsafe.Pointer(v.Pointer())
 
 	// Append data to undo log buffer.
-	_, err := t.undoBuf.Write((*[LOGSIZE]byte)(ptr)[:bytes:bytes])
+	_, err := t.undoBuf.Write((*[BUFFERSIZE]byte)(ptr)[:bytes:bytes])
 	if err != nil {
 		return err
 	}
@@ -185,7 +191,7 @@ func (t *undoTx) Abort() error {
 			return err
 		}
 		ptr := unsafe.Pointer(undoOff + t.undoEntry.offset)
-		_, err = t.undoBuf.Read((*[LOGSIZE]byte)(ptr)[:t.undoEntry.size:t.undoEntry.size])
+		_, err = t.undoBuf.Read((*[BUFFERSIZE]byte)(ptr)[:t.undoEntry.size:t.undoEntry.size])
 		if err != nil {
 			return err
 		}

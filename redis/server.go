@@ -7,9 +7,12 @@ import (
 	"os"
 	"pmem/region"
 	"pmem/transaction"
+	"runtime"
+	_ "runtime/debug"
 	"strconv"
 	_ "strings"
 	_ "time"
+	"unsafe"
 )
 
 type (
@@ -53,7 +56,7 @@ type (
 )
 
 const (
-	DATASIZE int    = 32000000
+	DATASIZE int    = 500 * 1024 * 1024 // 500M (must be mulitply of 8K)
 	UUID     int    = 9524
 	PORT     string = ":6379"
 
@@ -89,6 +92,8 @@ var (
 		redisCommand{"PEXPIRE", pexpireCommand, CMD_WRITE},
 		redisCommand{"PEXPIREAT", pexpireatCommand, CMD_WRITE},
 		redisCommand{"PERSIST", persistCommand, CMD_WRITE}}
+
+	pstart, pend uintptr
 )
 
 func RunServer() {
@@ -120,10 +125,27 @@ func (s *server) Start() {
 }
 
 func (s *server) init(path string) {
-	region.Init(path, DATASIZE, UUID)
+	offset := runtime.PmallocInit(path, transaction.LOGSIZE, DATASIZE)
+	isNew := region.InitMeta(offset, transaction.LOGSIZE, UUID)
+	pstart = uintptr(offset)
+	pend = pstart + uintptr(DATASIZE)
+	fmt.Println("pmem region: ", unsafe.Pointer(pstart), " ", unsafe.Pointer(pend))
 	tx := transaction.NewUndo()
-	s.db = &redisDb{NewDict(tx, 1024, 32), NewDict(tx, 128, 1)}
+	if isNew {
+		db := pnew(redisDb)
+		tx.Log(db)
+		db.dict = NewDict(tx, 1024, 32)
+		db.expire = NewDict(tx, 128, 1)
+		region.SetRoot(tx, unsafe.Pointer(db))
+		s.db = db
+	} else {
+		//debug.SetGCPercent(-1)
+		s.db = (*redisDb)(region.GetRoot())
+		s.db.swizzle(tx)
+	}
+	tx.Commit()
 	transaction.Release(tx)
+
 	s.populateCommandTable()
 	createSharedObjects()
 }
@@ -304,6 +326,7 @@ func (c *client) processCommand() {
 		c.tx.Begin()
 		c.cmd.proc(c)
 		c.tx.Commit()
+		//c.tx.Abort()
 		transaction.Release(c.tx)
 		c.tx = nil
 		c.wBuffer.Flush()

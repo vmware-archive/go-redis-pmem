@@ -65,6 +65,22 @@ func Init(pathname string, size, uuid int) {
 	heap.Init(undoTx, fdata[heapOffset:], size-heapOffset)
 
 	// (4) update pmem region header
+	initMeta(unsafe.Pointer(&fdata[0]), size, uuid)
+}
+
+func InitMeta(ptr unsafe.Pointer, size, uuid int) bool {
+	_region = (*pmemHeader)(ptr)
+	hdSize := int(unsafe.Sizeof(*_region))
+	mdata := (*[1 << 32]byte)(ptr)[:size:size]
+
+	transaction.Init(mdata[hdSize:])
+	return initMeta(ptr, size, uuid)
+}
+
+func initMeta(ptr unsafe.Pointer, size, uuid int) bool {
+	undoTx := transaction.NewUndo()
+	isNew := false
+
 	undoTx.Begin()
 	undoTx.Log(_region)
 	if _region.uuid == 0 {
@@ -72,8 +88,9 @@ func Init(pathname string, size, uuid int) {
 		_region.magic = MAGIC
 		_region.uuid = uuid
 		_region.size = size
-		_region.offset = uintptr(unsafe.Pointer(&fdata[0]))
+		_region.offset = uintptr(ptr)
 		_region.oldOffset = _region.offset
+		isNew = true
 	} else if _region.uuid == uuid {
 		log.Println("Retriving region info.")
 		if _region.magic != MAGIC {
@@ -82,13 +99,15 @@ func Init(pathname string, size, uuid int) {
 		if _region.size != size {
 			log.Fatal("Region size does not match!")
 		}
+		log.Println("Old mapping offset ", (unsafe.Pointer)(_region.offset), " New offset ", ptr)
 		_region.oldOffset = _region.offset
-		_region.offset = uintptr(unsafe.Pointer(&fdata[0]))
+		_region.offset = uintptr(ptr)
 	} else {
 		log.Fatal("Region uuid does not match!")
 	}
 	undoTx.Commit()
 	transaction.Release(undoTx)
+	return isNew
 }
 
 func SetRoot(t transaction.TX, ptr unsafe.Pointer) {

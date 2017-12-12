@@ -2,9 +2,9 @@ package redis
 
 import (
 	_ "fmt"
-	_ "pmem/transaction"
-	"strconv"
+	"pmem/transaction"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -87,10 +87,11 @@ func (c *client) setGeneric(flags int, key, val []byte, expire []byte, ms bool, 
 		}
 		return
 	}
-	c.db.setKey(c.tx, key, val)
+
+	c.db.setKey(c.tx, shadowCopyToPmem(key), shadowCopyToPmemI(val))
 	if expire != nil {
 		when := time.Now().UnixNano() + ns
-		c.db.setExpire(c.tx, key, strconv.AppendInt(nil, when, 10))
+		c.db.setExpire(c.tx, key, when)
 	}
 
 	if okReply != nil {
@@ -113,7 +114,7 @@ func getsetCommand(c *client) {
 	if !c.getGeneric() {
 		return
 	}
-	c.db.setKey(c.tx, c.argv[1], c.argv[2])
+	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 }
 
 func (c *client) getGeneric() bool {
@@ -140,33 +141,19 @@ func setrangeCommand(c *client) {
 		return
 	}
 
-	if v == nil {
-		if len(update) == 0 {
-			c.addReply(shared.czero)
-			return
-		}
-		newv := make([]byte, offset, offset+len(update)) // TODO: need to allocate in pmem
-		c.db.setKey(c.tx, c.argv[1], newv)
-		v = newv
+	if len(update) == 0 { // no updates
+		c.addReplyLongLong(len(v))
 	} else {
-		olen := len(v)
-		if len(update) == 0 {
-			c.addReplyLongLong(olen)
-			return
-		}
-	}
-
-	if len(update) > 0 {
 		needed := offset + len(update)
 		if needed > len(v) {
-			if offset > len(v) {
-				v = append(v, make([]byte, offset-len(v))...) // TODO: need to allocate in pmem
-			}
-			newv := append(v[:offset], update...) // TODO: need to allocate in pmem
-			c.db.setKey(c.tx, c.argv[1], newv)
+			newv := pmake([]byte, needed)
+			copy(newv, v)
+			copy(newv[offset:], update)
+			transaction.Persist(unsafe.Pointer(&newv[0]), len(newv)) // shadow update
+			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), newv)
 			c.addReplyLongLong(needed)
 		} else {
-			c.tx.Log(v[offset:needed])
+			c.tx.Log(v[offset:needed]) // inline update needs to be logged
 			copy(v[offset:], update)
 			c.addReplyLongLong(len(v))
 		}
@@ -256,7 +243,7 @@ func (c *client) msetGeneric(nx bool) {
 	}
 
 	for i := 1; i < c.argc; i += 2 {
-		c.db.setKey(c.tx, c.argv[i], c.argv[i+1])
+		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[i]), shadowCopyToPmemI(c.argv[i+1]))
 	}
 	if nx {
 		c.addReply(shared.cone)
@@ -274,13 +261,16 @@ func appendCommand(c *client) {
 	}
 	if v == nil {
 		/* Create the key */
-		c.db.setKey(c.tx, c.argv[1], c.argv[2])
+		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 		totlen = len(c.argv[2])
 	} else {
 		/* Append the value */
-		newv := append(v, c.argv[2]...) // TODO: need to create newv in pmem
+		newv := pmake([]byte, len(v)+len(c.argv[2]))
+		copy(newv, v)
+		copy(newv[len(v):], c.argv[2])
+		transaction.Persist(unsafe.Pointer(&newv[0]), len(newv)) // shadow update
 		totlen = len(newv)
-		c.db.setKey(c.tx, c.argv[1], newv)
+		c.db.setKey(c.tx, c.argv[1], newv) // no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
 	}
 	c.addReplyLongLong(totlen)
 }

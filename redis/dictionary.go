@@ -50,7 +50,7 @@ type (
 
 func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	// should be replaced with pNew(dict)
-	d := new(dict)
+	d := pnew(dict)
 
 	tx.Begin()
 	tx.Log(d)
@@ -74,10 +74,60 @@ func (d *dict) resetTable(tx transaction.TX, i int, s int) {
 	} else {
 		shards := d.shard(s)
 		d.tab[i].bucketlock = make([]sync.RWMutex, shards)
-		d.tab[i].bucket = make([]*entry, s)
-		d.tab[i].used = make([]int, shards)
+		d.tab[i].bucket = pmake([]*entry, s)
+		d.tab[i].used = pmake([]int, shards)
 	}
 	d.tab[i].mask = s - 1
+}
+
+func inPMem(a unsafe.Pointer) {
+	if a == nil {
+		return
+	}
+	if uintptr(a) < pstart || uintptr(a) > pend {
+		panic("Address not in pmem!")
+	}
+}
+
+func (d *dict) swizzle(tx transaction.TX) {
+	d.lock = new(sync.RWMutex)
+	d.rehashLock = new(sync.RWMutex)
+	d.swizzleTable(tx, 0)
+	d.swizzleTable(tx, 1)
+}
+
+func (d *dict) swizzleTable(tx transaction.TX, i int) {
+	s := d.tab[i].mask + 1
+	if s > 0 {
+		shards := d.shard(s)
+		d.tab[i].bucketlock = make([]sync.RWMutex, shards)
+
+		inPMem(unsafe.Pointer(&d.tab[i].bucket[0]))
+		inPMem(unsafe.Pointer(&d.tab[i].used[0]))
+		total := 0
+		x := 0
+		fmt.Println(d.tab[i].used)
+		for _, u := range d.tab[i].used {
+			total += u
+		}
+		fmt.Println("Total kv pairs:", total)
+		for _, e := range d.tab[i].bucket {
+			for e != nil {
+				inPMem(unsafe.Pointer(e))
+				inPMem(unsafe.Pointer(&(e.key[0])))
+				inPMem(unsafe.Pointer(e.next))
+				var tmp uintptr
+				word := uintptr(unsafe.Pointer(&e.value)) + uintptr(unsafe.Sizeof(tmp))
+				value := (**[]byte)(unsafe.Pointer(word))
+				inPMem(unsafe.Pointer(*value))
+				inPMem(unsafe.Pointer(&(**value)[0]))
+				//println(e, e.key, e.value, e.next)
+				//fmt.Println(x, string(e.key), string(*e.value.(*[]byte)))
+				x++
+				e = e.next
+			}
+		}
+	}
 }
 
 // get the shard number of a bucket id
@@ -267,11 +317,13 @@ func (d *dict) find(key []byte) (int, int, *entry, *entry) {
 	} else {
 		maxt = 0
 	}
+	// fmt.Println("finding ", key)
 	for i := 0; i <= maxt; i++ {
 		b = h & d.tab[i].mask
 		pre = nil
 		curr = d.tab[i].bucket[b]
 		for curr != nil {
+			// fmt.Println("comparing with ", curr)
 			if bytes.Compare(curr.key, key) == 0 {
 				return i, b, pre, curr
 			}
@@ -291,7 +343,7 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e.value = value
 		return false
 	} else {
-		e2 := new(entry) // pnew
+		e2 := pnew(entry)
 		e2.key = key
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
@@ -301,6 +353,7 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		s := d.shard(b)
 		tx.Log(d.tab[t].used[s : s+1])
 		d.tab[t].used[s]++
+		// fmt.Println("set entry: ", e2)
 		return true
 	}
 }

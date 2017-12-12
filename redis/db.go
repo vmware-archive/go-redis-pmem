@@ -57,6 +57,11 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 	}
 }
 
+func (db *redisDb) swizzle(tx transaction.TX) {
+	db.dict.swizzle(tx)
+	db.expire.swizzle(tx)
+}
+
 func existsCommand(c *client) {
 	count := 0
 
@@ -184,7 +189,7 @@ func (db *redisDb) randomKey() []byte {
 	}
 }
 
-// key and value should be in pmem
+// key and value data should be in pmem
 func (db *redisDb) setKey(tx transaction.TX, key []byte, value interface{}) (insert bool) {
 	db.removeExpire(tx, key)
 	return db.dict.set(tx, key, value)
