@@ -110,17 +110,18 @@ func getCommand(c *client) {
 
 func getsetCommand(c *client) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	c.getGeneric()
+	if !c.getGeneric() {
+		return
+	}
 	c.db.setKey(c.tx, c.argv[1], c.argv[2])
 }
 
-func (c *client) getGeneric() {
-	v := c.db.lookupKeyRead(c.tx, c.argv[1])
-	if v == nil {
-		c.addReply(shared.nullbulk)
-	} else {
+func (c *client) getGeneric() bool {
+	v, ok := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk, shared.wrongtypeerr)
+	if v != nil {
 		c.addReplyBulk(v)
 	}
+	return ok
 }
 
 func setrangeCommand(c *client) {
@@ -134,7 +135,10 @@ func setrangeCommand(c *client) {
 	}
 	update := c.argv[3]
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v := c.db.lookupKeyWrite(c.tx, c.argv[1])
+	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+	if !ok {
+		return
+	}
 
 	if v == nil {
 		if len(update) == 0 {
@@ -152,13 +156,7 @@ func setrangeCommand(c *client) {
 		}
 	}
 
-	if len(update) == 0 {
-		if v == nil {
-			c.addReply(shared.czero)
-		} else {
-			c.addReplyLongLong(len(v))
-		}
-	} else {
+	if len(update) > 0 {
 		needed := offset + len(update)
 		if needed > len(v) {
 			if offset > len(v) {
@@ -186,8 +184,12 @@ func getrangeCommand(c *client) {
 	}
 
 	var v []byte
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		v = c.db.lookupKeyRead(c.tx, c.argv[1])
+	var ok bool
+	if c.db.lockKeyRead(c.tx, c.argv[1]) { // not expired
+		v, ok = c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+		if v == nil || !ok {
+			return
+		}
 	}
 
 	strlen := len(v)
@@ -219,14 +221,13 @@ func mgetCommand(c *client) {
 	c.addReplyMultiBulkLen(c.argc - 1)
 	alives := c.db.lockKeysRead(c.tx, c.argv[1:], 1)
 	for i, k := range c.argv[1:] {
-		var v []byte
 		if alives[i] {
-			v = c.db.lookupKeyRead(c.tx, k)
-		}
-		if v == nil {
+			v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, k), shared.nullbulk, shared.nullbulk)
+			if v != nil {
+				c.addReplyBulk(v)
+			}
+		} else { // expired key
 			c.addReply(shared.nullbulk)
-		} else {
-			c.addReplyBulk(v)
 		}
 	}
 }
@@ -267,7 +268,10 @@ func (c *client) msetGeneric(nx bool) {
 func appendCommand(c *client) {
 	totlen := 0
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v := c.db.lookupKeyWrite(c.tx, c.argv[1])
+	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+	if !ok {
+		return
+	}
 	if v == nil {
 		/* Create the key */
 		c.db.setKey(c.tx, c.argv[1], c.argv[2])
@@ -282,14 +286,12 @@ func appendCommand(c *client) {
 }
 
 func strlenCommand(c *client) {
-	var v []byte
-
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		v = c.db.lookupKeyRead(c.tx, c.argv[1])
-	}
-
-	if v == nil {
+		v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+		if v != nil {
+			c.addReplyLongLong(len(v))
+		}
+	} else { // expired
 		c.addReply(shared.czero)
 	}
-	c.addReplyLongLong(len(v))
 }

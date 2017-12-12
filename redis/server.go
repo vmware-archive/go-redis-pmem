@@ -48,7 +48,7 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, czero, cone, ok, nullbulk, emptybulk, syntaxerr, bulkhead, inthead, arrayhead []byte
+		crlf, czero, cone, ok, nullbulk, emptybulk, syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead []byte
 	}
 )
 
@@ -137,16 +137,17 @@ func (s *server) populateCommandTable() {
 
 func createSharedObjects() {
 	shared = sharedObjects{
-		crlf:      []byte("\r\n"),
-		czero:     []byte(":0\r\n"),
-		cone:      []byte(":1\r\n"),
-		ok:        []byte("+OK\r\n"),
-		nullbulk:  []byte("$-1\r\n"),
-		emptybulk: []byte("$0\r\n\r\n"),
-		syntaxerr: []byte("-ERR syntax error\r\n"),
-		bulkhead:  []byte("$"),
-		inthead:   []byte(":"),
-		arrayhead: []byte("*")}
+		crlf:         []byte("\r\n"),
+		czero:        []byte(":0\r\n"),
+		cone:         []byte(":1\r\n"),
+		ok:           []byte("+OK\r\n"),
+		nullbulk:     []byte("$-1\r\n"),
+		emptybulk:    []byte("$0\r\n\r\n"),
+		syntaxerr:    []byte("-ERR syntax error\r\n"),
+		wrongtypeerr: []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+		bulkhead:     []byte("$"),
+		inthead:      []byte(":"),
+		arrayhead:    []byte("*")}
 }
 
 func (s *server) Cron() {

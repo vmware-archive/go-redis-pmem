@@ -37,7 +37,7 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 		} else {
 			e := db.expire.tab[0].bucket[i]
 			for e != nil {
-				when, _ := strconv.ParseInt(string(e.value), 10, 64)
+				when, _ := strconv.ParseInt(string(e.value.([]byte)), 10, 64)
 				now := time.Now().UnixNano()
 				if when <= now {
 					// fmt.Println("remove expire", string(e.key), when, now)
@@ -110,6 +110,7 @@ func randomkeyCommand(c *client) {
 func (db *redisDb) lockKeyWrite(tx transaction.TX, key []byte) {
 	db.expire.lockKey(tx, key)
 	db.dict.lockKey(tx, key)
+	db.expireIfNeeded(tx, key)
 }
 
 func (db *redisDb) lockKeyRead(tx transaction.TX, key []byte) bool {
@@ -121,6 +122,9 @@ func (db *redisDb) lockKeyRead(tx transaction.TX, key []byte) bool {
 func (db *redisDb) lockKeysWrite(tx transaction.TX, keys [][]byte, stride int) {
 	db.expire.lockKeys(tx, keys, stride)
 	db.dict.lockKeys(tx, keys, stride)
+	for i := 0; i < len(keys)/stride; i++ {
+		db.expireIfNeeded(tx, keys[i*stride])
+	}
 }
 
 func (db *redisDb) lockKeysRead(tx transaction.TX, keys [][]byte, stride int) []bool {
@@ -156,16 +160,15 @@ func (db *redisDb) checkLiveKey(key []byte) bool {
 	return false
 }
 
-func (db *redisDb) lookupKeyWrite(tx transaction.TX, key []byte) []byte {
-	db.expireIfNeeded(tx, key)
+func (db *redisDb) lookupKeyWrite(tx transaction.TX, key []byte) interface{} {
 	return db.lookupKey(key)
 }
 
-func (db *redisDb) lookupKeyRead(tx transaction.TX, key []byte) []byte {
+func (db *redisDb) lookupKeyRead(tx transaction.TX, key []byte) interface{} {
 	return db.lookupKey(key)
 }
 
-func (db *redisDb) lookupKey(key []byte) []byte {
+func (db *redisDb) lookupKey(key []byte) interface{} {
 	_, _, _, e := db.dict.find(key)
 	if e != nil {
 		return e.value
@@ -181,7 +184,8 @@ func (db *redisDb) randomKey() []byte {
 	}
 }
 
-func (db *redisDb) setKey(tx transaction.TX, key, value []byte) (insert bool) {
+// key and value should be in pmem
+func (db *redisDb) setKey(tx transaction.TX, key []byte, value interface{}) (insert bool) {
 	db.removeExpire(tx, key)
 	return db.dict.set(tx, key, value)
 }
@@ -228,13 +232,13 @@ func expireGeneric(c *client, base time.Time, d time.Duration) {
 		c.addReply(shared.cone)
 		return
 	} else {
-		c.db.setExpire(c.tx, c.argv[1], strconv.AppendInt(nil, expire.UnixNano(), 10)) // TODO: directly store time in expire dict when support multiple types as value
+		c.db.setExpire(c.tx, c.argv[1], expire.UnixNano()) // int64 value should be inlined in interface, therefore should also be persisted after set.
 		c.addReply(shared.cone)
 		return
 	}
 }
 
-func (db *redisDb) setExpire(tx transaction.TX, key, expire []byte) {
+func (db *redisDb) setExpire(tx transaction.TX, key []byte, expire interface{}) {
 	_, _, _, e := db.dict.find(key) // share the main dict key to save space
 	if e == nil {
 		panic("Trying set expire on non-existing key!")
@@ -260,18 +264,18 @@ func (db *redisDb) expireIfNeeded(tx transaction.TX, key []byte) {
 	db.delete(tx, key)
 }
 
-func (db *redisDb) getExpire(key []byte) int64 { // TODO: directly use time struct
+func (db *redisDb) getExpire(key []byte) int64 {
 	_, _, _, e := db.expire.find(key)
 	if e == nil {
 		return -1
 	}
 
-	when, err := strconv.ParseInt(string(e.value), 10, 64)
-	if err != nil {
-		panic("Expire value is not int!")
+	switch value := e.value.(type) {
+	case int64:
+		return value
+	default:
+		panic("Expire value type error!")
 	}
-
-	return when
 }
 
 func ttlCommand(c *client) {
@@ -294,7 +298,7 @@ func ttlGeneric(c *client, ms bool) {
 	}
 
 	expire := c.db.getExpire(c.argv[1])
-	if expire != -1 {
+	if expire > 0 {
 		ttl = expire - time.Now().UnixNano()
 		if ttl < 0 {
 			ttl = 0

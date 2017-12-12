@@ -43,7 +43,7 @@ type (
 
 	entry struct {
 		key   []byte
-		value []byte
+		value interface{}
 		next  *entry
 	}
 )
@@ -99,135 +99,6 @@ func fnvhash(key []byte) int {
 func memtierhash(key []byte) int {
 	h, _ := strconv.Atoi(string(key[8:]))
 	return h
-}
-
-func (d *dict) findKey(undoTx transaction.TX, key []byte, readOnly bool) (int, int, *entry, *entry, float64) {
-	h := d.hashKey(key)
-	var (
-		t, maxt, i int
-		pre, curr  *entry
-	)
-	if d.tab[1].mask > 0 {
-		maxt = 1
-	} else {
-		maxt = 0
-	}
-	var cmp float64 = 0
-	for t = 0; t <= maxt; t++ {
-		i = h & d.tab[t].mask
-		if readOnly {
-			undoTx.RLock(&d.tab[t].bucketlock[d.shard(i)])
-			//undoTx.RLock(d.tab[t].lock)
-		} else {
-			undoTx.WLock(&d.tab[t].bucketlock[d.shard(i)])
-			//undoTx.WLock(d.tab[t].lock)
-		}
-		curr = d.tab[t].bucket[i]
-		for curr != nil {
-			cmp++
-			if bytes.Compare(curr.key, key) == 0 {
-				return t, i, pre, curr, cmp
-			}
-			pre = curr
-			curr = curr.next
-		}
-	}
-	return maxt, i, pre, curr, cmp
-}
-
-func (d *dict) Used(undoTx transaction.TX) int {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.RLock(d.lock)
-	u := 0
-	for _, t := range d.tab {
-		if t.used != nil {
-			s := d.shard(t.mask + 1)
-			for i := 0; i <= s; i++ {
-				undoTx.RLock(&t.bucketlock[i])
-				u += t.used[i]
-			}
-		}
-	}
-	return u
-}
-
-func (d *dict) Set(undoTx transaction.TX, key, value []byte) (int, int, float64) {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.RLock(d.lock)
-
-	t, i, _, e, c := d.findKey(undoTx, key, false)
-
-	// copy volatile value into pmem heap (need pmake and a helper function for copy)
-	v := make([]byte, len(value)) //(*[1<<30]byte)(heap.Alloc(undoTx, len(value)))[:len(value):len(value)]
-	copy(v, value)
-	transaction.Persist(unsafe.Pointer(&v[0]), len(v)*int(unsafe.Sizeof(v[0]))) // shadow update
-
-	if e != nil { // note that gc cannot recycle e.value before commit.
-		undoTx.Log(&e.value)
-		e.value = v
-		return 0, 1, c
-	} else {
-		// copy volatile value into pmem heap (need pmake and a helper function for this copy)
-		k := make([]byte, len(key)) //(*[1<<30]byte)(heap.Alloc(undoTx, len(key)))[:len(key):len(key)]
-		copy(k, key)
-		transaction.Persist(unsafe.Pointer(&k[0]), len(k)*int(unsafe.Sizeof(k[0]))) // shadow update
-
-		// should be replaced with pNew
-		e2 := new(entry) //(*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(*e))))
-		e2.key = k
-		e2.value = v
-		e2.next = d.tab[t].bucket[i]
-		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
-		undoTx.Log(d.tab[t].bucket[i : i+1])
-		d.tab[t].bucket[i] = e2
-		s := d.shard(i)
-		undoTx.Log(d.tab[t].used[s : s+1])
-		d.tab[t].used[s]++
-		return 1, 0, c
-	}
-}
-
-func (d *dict) Get(undoTx transaction.TX, key []byte) []byte {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.RLock(d.lock)
-
-	_, _, _, e, _ := d.findKey(undoTx, key, true)
-	if e != nil {
-		return e.value
-	}
-	return []byte{}
-}
-
-func (d *dict) Del(undoTx transaction.TX, key []byte) bool {
-	undoTx.Begin()
-	defer undoTx.Commit()
-
-	undoTx.RLock(d.lock)
-
-	t, i, p, e, _ := d.findKey(undoTx, key, false)
-	deleted := false
-	if e != nil { // note that gc cannot recycle e before commit.
-		// update bucket (already locked when find key)
-		if p != nil {
-			undoTx.Log(p)
-			p.next = e.next
-		} else {
-			undoTx.Log(d.tab[t].bucket[i : i+1])
-			d.tab[t].bucket[i] = e.next
-		}
-
-		s := d.shard(i)
-		undoTx.Log(d.tab[t].used[s : s+1])
-		d.tab[t].used[s]--
-		deleted = true
-	}
-	return deleted
 }
 
 // rehash and resize
@@ -411,28 +282,18 @@ func (d *dict) find(key []byte) (int, int, *entry, *entry) {
 	return maxt, b, pre, curr
 }
 
-func (d *dict) set(tx transaction.TX, key, value []byte) (insert bool) {
+// key/value should be in pmem area, and appropriate locks should be already aquired at command level.
+func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert bool) {
 	t, b, _, e := d.find(key)
-
-	// copy volatile value into pmem heap (need pmake and a helper function for copy)
-	v := make([]byte, len(value))
-	copy(v, value)
-	transaction.Persist(unsafe.Pointer(&v[0]), len(v)*int(unsafe.Sizeof(v[0]))) // shadow update
 
 	if e != nil {
 		tx.Log(&e.value)
-		e.value = v
+		e.value = value
 		return false
 	} else {
-		// copy volatile value into pmem heap (need pmake and a helper function for this copy)
-		k := make([]byte, len(key)) //(*[1<<30]byte)(heap.Alloc(undoTx, len(key)))[:len(key):len(key)]
-		copy(k, key)
-		transaction.Persist(unsafe.Pointer(&k[0]), len(k)*int(unsafe.Sizeof(k[0]))) // shadow update
-
-		// should be replaced with pNew
-		e2 := new(entry) //(*entry)(heap.Alloc(undoTx, int(unsafe.Sizeof(*e))))
-		e2.key = k
-		e2.value = v
+		e2 := new(entry) // pnew
+		e2.key = key
+		e2.value = value
 		e2.next = d.tab[t].bucket[b]
 		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
 		tx.Log(d.tab[t].bucket[b : b+1])
@@ -479,7 +340,7 @@ func (d *dict) size() int {
 func (d *dict) empty(tx transaction.TX) {
 	d.resetTable(tx, 0, d.initSize)
 	d.resetTable(tx, 1, 0)
-	tx.Log(d.rehashIdx)
+	tx.Log(&d.rehashIdx)
 	d.rehashIdx = -1
 }
 

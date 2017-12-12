@@ -22,7 +22,7 @@ func TestServer(t *testing.T) {
 	conn.Write([]byte("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"))
 	time.Sleep(1 * time.Second)
 	undoTx := transaction.NewUndo()
-	fmt.Println(s.db.dict.Get(undoTx, []byte("foo")))
+	fmt.Println(s.db.lookupKeyRead(undoTx, []byte("foo")))
 	transaction.Release(undoTx)
 }
 
@@ -72,15 +72,15 @@ func BenchmarkDictSet(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		d.Set(undoTx, []byte(strconv.Itoa(i%10000)), []byte(strconv.Itoa(i)))
+		d.set(undoTx, []byte(strconv.Itoa(i%10000)), i)
 	}
 }
 
 func BenchmarkMapInsert(b *testing.B) {
-	mbench := make(map[string]string)
+	mbench := make(map[string]int)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		mbench[strconv.Itoa(i%10000)] = strconv.Itoa(i)
+		mbench[strconv.Itoa(i%10000)] = i
 	}
 }
