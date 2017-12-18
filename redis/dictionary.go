@@ -46,6 +46,14 @@ type (
 		value interface{}
 		next  *entry
 	}
+
+	dictIterator struct {
+		d                *dict
+		index            int
+		table, safe      int
+		entry, nextentry *entry
+		fingerprint      int64
+	}
 )
 
 func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
@@ -55,7 +63,11 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	tx.Begin()
 	tx.Log(d)
 	d.initSize = nextPower(1, initSize)
-	d.bucketPerShard = bucketPerShard
+	if bucketPerShard > initSize {
+		d.bucketPerShard = initSize
+	} else {
+		d.bucketPerShard = bucketPerShard
+	}
 	d.lock = new(sync.RWMutex)
 	d.rehashLock = new(sync.RWMutex)
 	d.resetTable(tx, 0, d.initSize)
@@ -66,7 +78,7 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 }
 
 func (d *dict) resetTable(tx transaction.TX, i int, s int) {
-	tx.Log(d.tab[i])
+	tx.Log(d.tab[i:])
 	if s == 0 {
 		d.tab[i].bucketlock = nil
 		d.tab[i].bucket = nil
@@ -85,48 +97,61 @@ func inPMem(a unsafe.Pointer) {
 		return
 	}
 	if uintptr(a) < pstart || uintptr(a) > pend {
+		println(a)
 		panic("Address not in pmem!")
 	}
 }
 
 func (d *dict) swizzle(tx transaction.TX) {
+	inPMem(unsafe.Pointer(d))
 	d.lock = new(sync.RWMutex)
 	d.rehashLock = new(sync.RWMutex)
-	d.swizzleTable(tx, 0)
-	d.swizzleTable(tx, 1)
+	d.tab[0].swizzle(tx, d)
+	d.tab[1].swizzle(tx, d)
 }
 
-func (d *dict) swizzleTable(tx transaction.TX, i int) {
-	s := d.tab[i].mask + 1
+func (t *table) swizzle(tx transaction.TX, d *dict) {
+	s := t.mask + 1
 	if s > 0 {
 		shards := d.shard(s)
-		d.tab[i].bucketlock = make([]sync.RWMutex, shards)
+		t.bucketlock = make([]sync.RWMutex, shards)
 
-		inPMem(unsafe.Pointer(&d.tab[i].bucket[0]))
-		inPMem(unsafe.Pointer(&d.tab[i].used[0]))
+		inPMem(unsafe.Pointer(&t.bucket[0]))
+		inPMem(unsafe.Pointer(&t.used[0]))
 		total := 0
 		x := 0
-		fmt.Println(d.tab[i].used)
-		for _, u := range d.tab[i].used {
+		for _, u := range t.used {
 			total += u
 		}
-		fmt.Println("Total kv pairs:", total)
-		for _, e := range d.tab[i].bucket {
+		// fmt.Println("Total kv pairs:", total)
+		for _, e := range t.bucket {
 			for e != nil {
-				inPMem(unsafe.Pointer(e))
-				inPMem(unsafe.Pointer(&(e.key[0])))
-				inPMem(unsafe.Pointer(e.next))
-				var tmp uintptr
-				word := uintptr(unsafe.Pointer(&e.value)) + uintptr(unsafe.Sizeof(tmp))
-				value := (**[]byte)(unsafe.Pointer(word))
-				inPMem(unsafe.Pointer(*value))
-				inPMem(unsafe.Pointer(&(**value)[0]))
-				//println(e, e.key, e.value, e.next)
-				//fmt.Println(x, string(e.key), string(*e.value.(*[]byte)))
 				x++
+				//println(x, e, e.key, e.value, e.next)
+				e.swizzle(tx)
 				e = e.next
 			}
 		}
+	}
+}
+
+func (e *entry) swizzle(tx transaction.TX) {
+	inPMem(unsafe.Pointer(e))
+	inPMem(unsafe.Pointer(&(e.key[0])))
+	inPMem(unsafe.Pointer(e.next))
+	//var tmp uintptr
+	//word := uintptr(unsafe.Pointer(&e.value)) + uintptr(unsafe.Sizeof(tmp))
+	//value := (**[]byte)(unsafe.Pointer(word))
+	//inPMem(unsafe.Pointer(*value))
+	switch v := e.value.(type) {
+	case *[]byte:
+		inPMem(unsafe.Pointer(&(*v)[0]))
+	case *dict:
+		v.swizzle(tx)
+	case int64:
+	default:
+		fmt.Println(e)
+		panic("unknown type!")
 	}
 }
 
@@ -163,6 +188,7 @@ func (d *dict) Cron(sleep time.Duration) {
 		tx.WLock(d.rehashLock)
 		if d.rehashIdx < 0 {
 			// check whether need to resize table when rehashIdx < 0
+			tx.WLock(d.lock)
 			used, size0, size1 = d.resizeIfNeeded(tx)
 			if size1 > 0 {
 				fmt.Println("Dictionary used", used, "Resize table to", size1)
@@ -173,7 +199,7 @@ func (d *dict) Cron(sleep time.Duration) {
 			d.lockShard(tx, 0, d.shard(d.rehashIdx)) // lock bucket in tab[0]
 			e := d.tab[0].bucket[d.rehashIdx]
 			if e == nil {
-				tx.Log(d.rehashIdx)
+				tx.Log(&d.rehashIdx)
 				d.rehashIdx++
 			} else {
 				i0 := d.rehashIdx
@@ -209,9 +235,43 @@ func (d *dict) Cron(sleep time.Duration) {
 	}
 }
 
-func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
-	tx.WLock(d.lock)
+func (d *dict) shadowResize(tx transaction.TX) {
+	size0 := len(d.tab[0].bucket)
+	used := d.size()
 
+	if used > size0 || (size0 > d.initSize && used < size0/Ratio) {
+		// shadow rehash to a tmp table
+		size1 := nextPower(d.initSize, used)
+		shards := d.shard(size1)
+		t1 := table{bucketlock: make([]sync.RWMutex, shards),
+			bucket: pmake([]*entry, size1),
+			used:   pmake([]int, shards),
+			mask:   size1 - 1}
+		for i := 0; i < size0; i++ {
+			e := d.tab[0].bucket[i]
+			for e != nil {
+				i1 := d.hashKey(e.key) & (size1 - 1)
+				s1 := d.shard(i1)
+				e1 := pnew(entry)
+				e1.key = e.key
+				e1.value = e.value
+				e1.next = t1.bucket[i1]
+				transaction.Persist(unsafe.Pointer(e1), int(unsafe.Sizeof(*e1))) // shadow update
+				t1.bucket[i1] = e1
+				transaction.Persist(unsafe.Pointer(&t1.bucket[i1]), int(unsafe.Sizeof(e1))) // shadow update
+				t1.used[s1] += 1
+				transaction.Persist(unsafe.Pointer(&t1.used[s1]), int(unsafe.Sizeof(s1))) // shadow update
+				e = e.next
+			}
+		}
+		// swap table
+		tx.Log(d.tab[0:1])
+		d.tab[0] = t1
+		//fmt.Println("rehash value to", size1, d.tab[0])
+	}
+}
+
+func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
 	size0 = len(d.tab[0].bucket)
 	used = d.size()
 
@@ -228,6 +288,7 @@ func (d *dict) resize(tx transaction.TX, s int) int {
 	s = nextPower(d.initSize, s)
 
 	d.resetTable(tx, 1, s)
+	tx.Log(&d.rehashIdx)
 	d.rehashIdx = 0
 	return s
 }
@@ -381,10 +442,16 @@ func (d *dict) delete(tx transaction.TX, key []byte) (deleted bool) {
 func (d *dict) size() int {
 	s := 0
 	for _, t := range d.tab {
-		if t.used != nil {
-			for _, u := range t.used {
-				s += u
-			}
+		s += t.size()
+	}
+	return s
+}
+
+func (t *table) size() int {
+	s := 0
+	if t.used != nil {
+		for _, u := range t.used {
+			s += u
 		}
 	}
 	return s
@@ -431,4 +498,42 @@ func (d *dict) randomKey() []byte {
 		e = e.next
 	}
 	return e.key
+}
+
+func (d *dict) getIterator() *dictIterator {
+	iter := &dictIterator{
+		d:         d,
+		table:     0,
+		index:     -1,
+		safe:      0,
+		entry:     nil,
+		nextentry: nil}
+	return iter
+}
+
+func (i *dictIterator) next() *entry {
+	for {
+		if i.entry == nil {
+			ht := i.d.tab[i.table]
+			// TODO: implement safe iterator and fingerprint
+			i.index++
+			if i.index >= len(ht.bucket) {
+				if i.table == 0 && len(i.d.tab[1].bucket) > 0 {
+					i.table++
+					i.index = 0
+					ht = i.d.tab[1]
+				} else {
+					break
+				}
+			}
+			i.entry = ht.bucket[i.index]
+		} else {
+			i.entry = i.nextentry
+		}
+		if i.entry != nil {
+			i.nextentry = i.entry.next
+			return i.entry
+		}
+	}
+	return nil
 }

@@ -51,7 +51,7 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, czero, cone, ok, nullbulk, emptybulk, syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead []byte
+		crlf, czero, cone, ok, nullbulk, emptybulk, emptymultibulk, syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead []byte
 	}
 )
 
@@ -70,6 +70,14 @@ var (
 		redisCommand{"GET", getCommand, CMD_READONLY},
 		redisCommand{"GETRANGE", getrangeCommand, CMD_READONLY},
 		redisCommand{"MGET", mgetCommand, CMD_READONLY},
+		redisCommand{"HGET", hgetCommand, CMD_READONLY},
+		redisCommand{"HMGET", hmgetCommand, CMD_READONLY},
+		redisCommand{"HLEN", hlenCommand, CMD_READONLY},
+		redisCommand{"HSTRLEN", hstrlenCommand, CMD_READONLY},
+		redisCommand{"HKEYS", hkeysCommand, CMD_READONLY},
+		redisCommand{"HVALS", hvalsCommand, CMD_READONLY},
+		redisCommand{"HGETALL", hgetallCommand, CMD_READONLY},
+		redisCommand{"HEXISTS", hexistsCommand, CMD_READONLY},
 		redisCommand{"EXISTS", existsCommand, CMD_READONLY},
 		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
 		redisCommand{"RANDOMKEY", randomkeyCommand, CMD_READONLY},
@@ -85,6 +93,10 @@ var (
 		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
 		redisCommand{"MSET", msetCommand, CMD_WRITE},
 		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE},
+		redisCommand{"HSET", hsetCommand, CMD_WRITE},
+		redisCommand{"HSETNX", hsetnxCommand, CMD_WRITE},
+		redisCommand{"HMSET", hsetCommand, CMD_WRITE},
+		redisCommand{"HDEL", hdelCommand, CMD_WRITE},
 		redisCommand{"DEL", delCommand, CMD_WRITE},
 		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
@@ -159,17 +171,18 @@ func (s *server) populateCommandTable() {
 
 func createSharedObjects() {
 	shared = sharedObjects{
-		crlf:         []byte("\r\n"),
-		czero:        []byte(":0\r\n"),
-		cone:         []byte(":1\r\n"),
-		ok:           []byte("+OK\r\n"),
-		nullbulk:     []byte("$-1\r\n"),
-		emptybulk:    []byte("$0\r\n\r\n"),
-		syntaxerr:    []byte("-ERR syntax error\r\n"),
-		wrongtypeerr: []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
-		bulkhead:     []byte("$"),
-		inthead:      []byte(":"),
-		arrayhead:    []byte("*")}
+		crlf:           []byte("\r\n"),
+		czero:          []byte(":0\r\n"),
+		cone:           []byte(":1\r\n"),
+		ok:             []byte("+OK\r\n"),
+		nullbulk:       []byte("$-1\r\n"),
+		emptybulk:      []byte("$0\r\n\r\n"),
+		emptymultibulk: []byte("*0\r\n"),
+		syntaxerr:      []byte("-ERR syntax error\r\n"),
+		wrongtypeerr:   []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+		bulkhead:       []byte("$"),
+		inthead:        []byte(":"),
+		arrayhead:      []byte("*")}
 }
 
 func (s *server) Cron() {

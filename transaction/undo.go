@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"sync"
 	"unsafe"
+	"runtime/debug"
 )
 
 type (
@@ -121,14 +122,13 @@ func (t *undoTx) Log(data interface{}) error {
 	v := reflect.ValueOf(data)
 	bytes := 0
 	switch kind := v.Kind(); kind {
-	case reflect.Array:
-		fallthrough
 	case reflect.Slice:
 		bytes = v.Len() * int(v.Type().Elem().Size())
 	case reflect.Ptr:
 		bytes = int(v.Elem().Type().Size())
 	default:
-		return errors.New("tx.undo: Log data must be pointer/array/slice!")
+		debug.PrintStack()
+		return errors.New("tx.undo: Log data must be pointer/slice!")
 	}
 	ptr := unsafe.Pointer(v.Pointer())
 

@@ -3,7 +3,7 @@ package redis
 import (
 	_ "fmt"
 	"pmem/transaction"
-	"strconv"
+	_ "strconv"
 	"time"
 )
 
@@ -31,26 +31,21 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 		i = i & mask
 		s := db.expire.shard(i)
 		db.expire.lockShard(tx, 0, s)
-		u := db.expire.tab[0].used[s]
-		if u == 0 {
-			i = db.expire.shard(i+db.expire.bucketPerShard) * db.expire.bucketPerShard
-		} else {
-			e := db.expire.tab[0].bucket[i]
-			for e != nil {
-				when, _ := strconv.ParseInt(string(e.value.([]byte)), 10, 64)
-				now := time.Now().UnixNano()
-				if when <= now {
-					// fmt.Println("remove expire", string(e.key), when, now)
-					db.dict.lockKey(tx, e.key)
-					db.delete(tx, e.key)
-					e = e.next
-					break // only delete one expire key in each transaction to prevent deadlock.
-				}
+		e := db.expire.tab[0].bucket[i]
+		for e != nil {
+			when := e.value.(int64)
+			now := time.Now().UnixNano()
+			if when <= now {
+				// println("remove expire", string(e.key), when, now)
+				db.dict.lockKey(tx, e.key)
+				db.delete(tx, e.key)
 				e = e.next
+				break // only delete one expire key in each transaction to prevent deadlock.
 			}
-			if e == nil { // finished checking current bucket
-				i++
-			}
+			e = e.next
+		}
+		if e == nil { // finished checking current bucket
+			i++
 		}
 		tx.Commit()
 		time.Sleep(sleep) // reduce cpu consumption and lock contention

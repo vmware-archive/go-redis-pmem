@@ -26,6 +26,24 @@ func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte)
 	}
 }
 
+func (c *client) getHashOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) { // hash can be implemented with different encodings.
+	if i == nil {
+		if emptymsg != nil {
+			c.addReply(emptymsg)
+		}
+		return nil, true
+	}
+	switch i.(type) {
+	case *dict:
+		return i, true
+	default:
+		if errmsg != nil {
+			c.addReply(errmsg)
+		}
+		return nil, false
+	}
+}
+
 // slice and interface are passed by value, so the returned slice/interface maybe actually in volatile memory, and only the underlying data is in pmem.
 func shadowCopyToPmem(v []byte) []byte {
 	pv := pmake([]byte, len(v)) // here pv is actually in volatile memory, but it's pointing to in pmem array.

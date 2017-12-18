@@ -45,22 +45,22 @@ func setCommand(c *client) {
 			return
 		}
 	}
-	c.setGeneric(flags, c.argv[1], c.argv[2], expire, ms, nil, nil)
+	setGeneric(c, flags, c.argv[1], c.argv[2], expire, ms, nil, nil)
 }
 
 func setnxCommand(c *client) {
-	c.setGeneric(OBJ_SET_NX, c.argv[1], c.argv[2], nil, false, shared.cone, shared.czero)
+	setGeneric(c, OBJ_SET_NX, c.argv[1], c.argv[2], nil, false, shared.cone, shared.czero)
 }
 
 func setexCommand(c *client) {
-	c.setGeneric(OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], false, nil, nil)
+	setGeneric(c, OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], false, nil, nil)
 }
 
 func psetexCommand(c *client) {
-	c.setGeneric(OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], true, nil, nil)
+	setGeneric(c, OBJ_SET_NO_FLAGS, c.argv[1], c.argv[3], c.argv[2], true, nil, nil)
 }
 
-func (c *client) setGeneric(flags int, key, val []byte, expire []byte, ms bool, okReply, abortReply []byte) {
+func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, okReply, abortReply []byte) {
 	var ns int64 = -1
 	if expire != nil {
 		t, err := c.getLongLongFromObjectOrReply(expire, nil)
@@ -103,7 +103,7 @@ func (c *client) setGeneric(flags int, key, val []byte, expire []byte, ms bool, 
 
 func getCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		c.getGeneric()
+		getGeneric(c)
 	} else { // expired
 		c.addReply(shared.nullbulk)
 	}
@@ -111,13 +111,13 @@ func getCommand(c *client) {
 
 func getsetCommand(c *client) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	if !c.getGeneric() {
+	if !getGeneric(c) {
 		return
 	}
 	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 }
 
-func (c *client) getGeneric() bool {
+func getGeneric(c *client) bool {
 	v, ok := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk, shared.wrongtypeerr)
 	if v != nil {
 		c.addReplyBulk(v)
@@ -220,14 +220,14 @@ func mgetCommand(c *client) {
 }
 
 func msetCommand(c *client) {
-	c.msetGeneric(false)
+	msetGeneric(c, false)
 }
 
 func msetnxCommand(c *client) {
-	c.msetGeneric(true)
+	msetGeneric(c, true)
 }
 
-func (c *client) msetGeneric(nx bool) {
+func msetGeneric(c *client, nx bool) {
 	if c.argc%2 == 0 {
 		c.addReplyError([]byte("wrong number of arguments for MSET"))
 		return
