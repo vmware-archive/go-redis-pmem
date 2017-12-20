@@ -4,6 +4,8 @@ package redis
  * Therefore, there is no extra lock required for field access within the hash value.
  * However, the outter lock also prevents concurrent writes or read/write into the same hash value. */
 
+import "pmem/transaction"
+
 type hashTypeIterator struct {
 	subject interface{}
 	di      *dictIterator
@@ -139,7 +141,7 @@ func hgetallCommand(c *client) {
 
 func genericHgetallCommand(c *client, getK, getV bool) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.emptymultibulk, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk, shared.wrongtypeerr)
 		if ok && o != nil {
 			multiplier := 0
 			if getK {
@@ -163,7 +165,7 @@ func genericHgetallCommand(c *client, getK, getV bool) {
 
 func hexistsCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
 		if ok && o != nil {
 			if hashTypeExists(o, c.argv[2]) {
 				c.addReply(shared.cone)
@@ -213,7 +215,7 @@ func hashTypeSet(c *client, o interface{}, field, value []byte) bool {
 			update = true
 		} else {
 			d.set(c.tx, shadowCopyToPmem(field), shadowCopyToPmemI(value))
-			d.shadowResize(c.tx) // explicit resize and rehash if needed
+			go hashTypeBgResize(c.db, c.argv[1])
 		}
 	default:
 		panic("Unknown hash encoding")
@@ -227,12 +229,46 @@ func hashTypeDelete(c *client, o interface{}, field []byte) bool {
 	case *dict:
 		if d.delete(c.tx, field) {
 			deleted = true
-			d.shadowResize(c.tx)  // explicit resize and rehash if needed
+			go hashTypeBgResize(c.db, c.argv[1])
 		}
 	default:
 		panic("Unknown hash encoding")
 	}
 	return deleted
+}
+
+func hashTypeBgResize(db *redisDb, key []byte) {
+	tx := transaction.NewUndo()
+	rehash := true
+	for rehash {
+		// need to lock and get kv pair in every transaction
+		tx.Begin()
+		db.lockKeyWrite(tx, key)
+		o := db.lookupKeyWrite(tx, key)
+		if o == nil {
+			break
+		}
+		switch d := o.(type) {
+		case *dict:
+			if d.rehashIdx == -1 {
+				_, _, size1 := d.resizeIfNeeded(tx)
+				if size1 == 0 {
+					rehash = false
+				} else {
+					println("Rehash hash key", string(key), "to size", size1)
+				}
+			} else if d.rehashIdx == -2 {
+				d.rehashSwap(tx)
+				rehash = false
+			} else {
+				d.rehashStep(tx)
+			}
+			tx.Commit()
+		default:
+			rehash = false
+		}
+	}
+	transaction.Release(tx)
 }
 
 // need to check o != nil outside

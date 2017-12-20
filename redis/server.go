@@ -355,6 +355,8 @@ func (c *client) notSupported() {
 	for _, q := range c.argv {
 		fmt.Print(string(q), " ")
 	}
+	c.addReply(shared.wrongtypeerr)
+	c.wBuffer.Flush()
 }
 
 func (c *client) addReply(s []byte) {

@@ -14,41 +14,47 @@ import (
  * bucket id ascending
  */
 
+var expired chan []byte = make(chan []byte, 100)
+
 func (db *redisDb) Cron() {
-	go db.dict.Cron(10 * time.Millisecond)
-	go db.expire.Cron(10 * time.Millisecond)
-	go db.expireCron(1 * time.Millisecond)
+	go db.dict.Cron(100 * time.Millisecond)
+	go db.expire.Cron(100 * time.Millisecond)
+	go db.expireCron(10 * time.Millisecond)
 }
 
 // active expire (only check table 0 for simplicity)
 func (db *redisDb) expireCron(sleep time.Duration) {
 	tx := transaction.NewUndo()
 	i := 0
+	ticker := time.NewTicker(sleep)
 	for {
 		tx.Begin()
-		tx.RLock(db.expire.lock)
-		mask := db.expire.tab[0].mask
-		i = i & mask
-		s := db.expire.shard(i)
-		db.expire.lockShard(tx, 0, s)
-		e := db.expire.tab[0].bucket[i]
-		for e != nil {
-			when := e.value.(int64)
-			now := time.Now().UnixNano()
-			if when <= now {
-				// println("remove expire", string(e.key), when, now)
-				db.dict.lockKey(tx, e.key)
-				db.delete(tx, e.key)
+		select {
+		case key := <-expired:
+			db.lockKeyWrite(tx, key) // lockKeyWrite calls expireIfNeeded.
+		case <-ticker.C:
+			tx.RLock(db.expire.lock)
+			mask := db.expire.tab[0].mask
+			i = i & mask
+			s := db.expire.shard(i)
+			db.expire.lockShard(tx, 0, s)
+			e := db.expire.tab[0].bucket[i]
+			for e != nil {
+				when := e.value.(int64)
+				now := time.Now().UnixNano()
+				if when <= now {
+					db.dict.lockKey(tx, e.key)
+					db.delete(tx, e.key)
+					e = e.next
+					break // only delete one expire key in each transaction to prevent deadlock.
+				}
 				e = e.next
-				break // only delete one expire key in each transaction to prevent deadlock.
 			}
-			e = e.next
-		}
-		if e == nil { // finished checking current bucket
-			i++
+			if e == nil { // finished checking current bucket
+				i++
+			}
 		}
 		tx.Commit()
-		time.Sleep(sleep) // reduce cpu consumption and lock contention
 	}
 }
 
@@ -157,6 +163,7 @@ func (db *redisDb) checkLiveKey(key []byte) bool {
 	if now < when {
 		return true
 	}
+	expired <- key
 	return false
 }
 
@@ -260,7 +267,6 @@ func (db *redisDb) expireIfNeeded(tx transaction.TX, key []byte) {
 	if now < when {
 		return
 	}
-
 	db.delete(tx, key)
 }
 

@@ -186,89 +186,64 @@ func (d *dict) Cron(sleep time.Duration) {
 		}
 		tx.Begin()
 		tx.WLock(d.rehashLock)
-		if d.rehashIdx < 0 {
+		if d.rehashIdx == -1 {
 			// check whether need to resize table when rehashIdx < 0
 			tx.WLock(d.lock)
 			used, size0, size1 = d.resizeIfNeeded(tx)
 			if size1 > 0 {
-				fmt.Println("Dictionary used", used, "Resize table to", size1)
+				fmt.Println("Dictionary used / size:", used, "/", size0, " ,Resize table to: ", size1)
 			}
-		} else if d.rehashIdx < size0 {
-			// rehash, one key each time
-			tx.RLock(d.lock)
-			d.lockShard(tx, 0, d.shard(d.rehashIdx)) // lock bucket in tab[0]
-			e := d.tab[0].bucket[d.rehashIdx]
-			if e == nil {
-				tx.Log(&d.rehashIdx)
-				d.rehashIdx++
-			} else {
-				i0 := d.rehashIdx
-				i1 := d.hashKey(e.key) & (size1 - 1)
-				s0 := d.shard(i0)
-				s1 := d.shard(i1)
-
-				d.lockShard(tx, 1, s1)
-				tx.Log(e)
-				tx.Log(d.tab[0].bucket[i0 : i0+1])
-				tx.Log(d.tab[1].bucket[i1 : i1+1])
-				tx.Log(d.tab[0].used[s0 : s0+1])
-				tx.Log(d.tab[1].used[s1 : s1+1])
-
-				next := e.next
-				e.next = d.tab[1].bucket[i1]
-				d.tab[0].bucket[i0] = next
-				d.tab[0].used[s0]--
-				d.tab[1].bucket[i1] = e
-				d.tab[1].used[s1]++
-			}
-		} else {
-			// rehash finished, reset table
+		} else if d.rehashIdx == -2 {
 			tx.WLock(d.lock)
-			tx.Log(d)
-			d.tab[0] = d.tab[1]
-			d.resetTable(tx, 1, 0)
-			d.rehashIdx = -1
+			d.rehashSwap(tx)
 			size1 = 0
-			fmt.Println("Rehash finished!")
+		} else {
+			tx.RLock(d.lock)
+			d.rehashStep(tx)
 		}
 		tx.Commit()
 	}
 }
 
-func (d *dict) shadowResize(tx transaction.TX) {
-	size0 := len(d.tab[0].bucket)
-	used := d.size()
+func (d *dict) rehashStep(tx transaction.TX) {
+	if d.rehashIdx >= 0 && d.rehashIdx < len(d.tab[0].bucket) {
+		d.lockShard(tx, 0, d.shard(d.rehashIdx))
+		e := d.tab[0].bucket[d.rehashIdx]
+		if e == nil {
+			tx.Log(&d.rehashIdx)
+			d.rehashIdx++
+		} else {
+			i0 := d.rehashIdx
+			i1 := d.hashKey(e.key) & (d.tab[1].mask)
+			s0 := d.shard(i0)
+			s1 := d.shard(i1)
 
-	if used > size0 || (size0 > d.initSize && used < size0/Ratio) {
-		// shadow rehash to a tmp table
-		size1 := nextPower(d.initSize, used)
-		shards := d.shard(size1)
-		t1 := table{bucketlock: make([]sync.RWMutex, shards),
-			bucket: pmake([]*entry, size1),
-			used:   pmake([]int, shards),
-			mask:   size1 - 1}
-		for i := 0; i < size0; i++ {
-			e := d.tab[0].bucket[i]
-			for e != nil {
-				i1 := d.hashKey(e.key) & (size1 - 1)
-				s1 := d.shard(i1)
-				e1 := pnew(entry)
-				e1.key = e.key
-				e1.value = e.value
-				e1.next = t1.bucket[i1]
-				transaction.Persist(unsafe.Pointer(e1), int(unsafe.Sizeof(*e1))) // shadow update
-				t1.bucket[i1] = e1
-				transaction.Persist(unsafe.Pointer(&t1.bucket[i1]), int(unsafe.Sizeof(e1))) // shadow update
-				t1.used[s1] += 1
-				transaction.Persist(unsafe.Pointer(&t1.used[s1]), int(unsafe.Sizeof(s1))) // shadow update
-				e = e.next
-			}
+			d.lockShard(tx, 1, s1)
+			tx.Log(e)
+			tx.Log(d.tab[0].bucket[i0 : i0+1])
+			tx.Log(d.tab[1].bucket[i1 : i1+1])
+			tx.Log(d.tab[0].used[s0 : s0+1])
+			tx.Log(d.tab[1].used[s1 : s1+1])
+
+			next := e.next
+			e.next = d.tab[1].bucket[i1]
+			d.tab[0].bucket[i0] = next
+			d.tab[0].used[s0]--
+			d.tab[1].bucket[i1] = e
+			d.tab[1].used[s1]++
 		}
-		// swap table
-		tx.Log(d.tab[0:1])
-		d.tab[0] = t1
-		//fmt.Println("rehash value to", size1, d.tab[0])
 	}
+	if d.rehashIdx == len(d.tab[0].bucket) {
+		d.rehashIdx = -2
+	}
+}
+
+func (d *dict) rehashSwap(tx transaction.TX) {
+	tx.Log(d)
+	d.tab[0] = d.tab[1]
+	d.resetTable(tx, 1, 0)
+	d.rehashIdx = -1
+	fmt.Println("Rehash finished!")
 }
 
 func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
