@@ -199,7 +199,7 @@ func (db *redisDb) setKey(tx transaction.TX, key []byte, value interface{}) (ins
 
 func (db *redisDb) delete(tx transaction.TX, key []byte) bool {
 	db.expire.delete(tx, key)
-	return db.dict.delete(tx, key)
+	return (db.dict.delete(tx, key) != nil)
 }
 
 func expireCommand(c *client) {
@@ -254,7 +254,7 @@ func (db *redisDb) setExpire(tx transaction.TX, key []byte, expire interface{}) 
 }
 
 func (db *redisDb) removeExpire(tx transaction.TX, key []byte) bool {
-	return db.expire.delete(tx, key)
+	return db.expire.delete(tx, key) != nil
 }
 
 // tx must be writable

@@ -148,7 +148,10 @@ func (e *entry) swizzle(tx transaction.TX) {
 		inPMem(unsafe.Pointer(&(*v)[0]))
 	case *dict:
 		v.swizzle(tx)
+	case *zset:
+		v.swizzle(tx)
 	case int64:
+	case float64:
 	default:
 		fmt.Println(e)
 		panic("unknown type!")
@@ -161,13 +164,25 @@ func (d *dict) shard(b int) int {
 }
 
 func (d *dict) hashKey(key []byte) int {
-	return memtierhash(key)
+	return dumbhash(key)
 }
 
 func fnvhash(key []byte) int {
 	fnvHash.Write(key)
 	h := int(fnvHash.Sum32())
 	fnvHash.Reset()
+	return h
+}
+
+func dumbhash(key []byte) int {
+	h := 0
+	for i,n := range(key) {
+		x := int(n)
+		for ; i < len(key); i++ {
+			x *= 10
+		}
+		h += x
+	}
 	return h
 }
 
@@ -220,10 +235,10 @@ func (d *dict) rehashStep(tx transaction.TX) {
 
 			d.lockShard(tx, 1, s1)
 			tx.Log(e)
-			tx.Log(d.tab[0].bucket[i0 : i0+1])
-			tx.Log(d.tab[1].bucket[i1 : i1+1])
-			tx.Log(d.tab[0].used[s0 : s0+1])
-			tx.Log(d.tab[1].used[s1 : s1+1])
+			tx.Log(&d.tab[0].bucket[i0])
+			tx.Log(&d.tab[1].bucket[i1])
+			tx.Log(&d.tab[0].used[s0])
+			tx.Log(&d.tab[1].used[s1])
 
 			next := e.next
 			e.next = d.tab[1].bucket[i1]
@@ -243,7 +258,7 @@ func (d *dict) rehashSwap(tx transaction.TX) {
 	d.tab[0] = d.tab[1]
 	d.resetTable(tx, 1, 0)
 	d.rehashIdx = -1
-	fmt.Println("Rehash finished!")
+	//fmt.Println("Rehash finished!")
 }
 
 func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
@@ -384,34 +399,32 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
 		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
-		tx.Log(d.tab[t].bucket[b : b+1])
+		tx.Log(&d.tab[t].bucket[b])
 		d.tab[t].bucket[b] = e2
 		s := d.shard(b)
-		tx.Log(d.tab[t].used[s : s+1])
+		tx.Log(&d.tab[t].used[s])
 		d.tab[t].used[s]++
 		// fmt.Println("set entry: ", e2)
 		return true
 	}
 }
 
-func (d *dict) delete(tx transaction.TX, key []byte) (deleted bool) {
+func (d *dict) delete(tx transaction.TX, key []byte) *entry {
 	t, b, p, e := d.find(key)
-	deleted = false
 	if e != nil { // note that gc should not recycle e before commit.
 		if p != nil {
 			tx.Log(p)
 			p.next = e.next
 		} else {
-			tx.Log(d.tab[t].bucket[b : b+1])
+			tx.Log(&d.tab[t].bucket[b])
 			d.tab[t].bucket[b] = e.next
 		}
 
 		s := d.shard(b)
-		tx.Log(d.tab[t].used[s : s+1])
+		tx.Log(&d.tab[t].used[s])
 		d.tab[t].used[s]--
-		deleted = true
 	}
-	return deleted
+	return e
 }
 
 func (d *dict) size() int {

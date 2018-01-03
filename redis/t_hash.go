@@ -227,7 +227,7 @@ func hashTypeDelete(c *client, o interface{}, field []byte) bool {
 	deleted := false
 	switch d := o.(type) {
 	case *dict:
-		if d.delete(c.tx, field) {
+		if d.delete(c.tx, field) != nil {
 			deleted = true
 			go hashTypeBgResize(c.db, c.argv[1])
 		}
@@ -255,7 +255,7 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 				if size1 == 0 {
 					rehash = false
 				} else {
-					println("Rehash hash key", string(key), "to size", size1)
+					//println("Rehash hash key", string(key), "to size", size1)
 				}
 			} else if d.rehashIdx == -2 {
 				d.rehashSwap(tx)
@@ -263,10 +263,10 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 			} else {
 				d.rehashStep(tx)
 			}
-			tx.Commit()
 		default:
 			rehash = false
 		}
+		tx.Commit()
 	}
 	transaction.Release(tx)
 }

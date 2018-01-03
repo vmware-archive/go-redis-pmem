@@ -26,15 +26,33 @@ func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte)
 	}
 }
 
-func (c *client) getHashOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) { // hash can be implemented with different encodings.
+func (c *client) getHashOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) {
 	if i == nil {
 		if emptymsg != nil {
 			c.addReply(emptymsg)
 		}
 		return nil, true
 	}
-	switch i.(type) {
+	switch i.(type) { //TODO: support ziplist
 	case *dict:
+		return i, true
+	default:
+		if errmsg != nil {
+			c.addReply(errmsg)
+		}
+		return nil, false
+	}
+}
+
+func (c *client) getZsetOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) {
+	if i == nil {
+		if emptymsg != nil {
+			c.addReply(emptymsg)
+		}
+		return nil, true
+	}
+	switch i.(type) { //TODO: support ziplist
+	case *zset:
 		return i, true
 	default:
 		if errmsg != nil {

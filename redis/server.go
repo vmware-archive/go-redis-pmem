@@ -45,6 +45,7 @@ type (
 		querybuf     []byte
 		multibulklen int
 		bulklen      int
+		replybuf     [][]byte
 
 		cmd *redisCommand
 		tx  transaction.TX
@@ -78,6 +79,8 @@ var (
 		redisCommand{"HVALS", hvalsCommand, CMD_READONLY},
 		redisCommand{"HGETALL", hgetallCommand, CMD_READONLY},
 		redisCommand{"HEXISTS", hexistsCommand, CMD_READONLY},
+		redisCommand{"ZRANGEBYSCORE", zrangebyscoreCommand, CMD_READONLY},
+		redisCommand{"ZREVRANGEBYSCORE", zrevrangebyscoreCommand, CMD_READONLY},
 		redisCommand{"EXISTS", existsCommand, CMD_READONLY},
 		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
 		redisCommand{"RANDOMKEY", randomkeyCommand, CMD_READONLY},
@@ -97,6 +100,8 @@ var (
 		redisCommand{"HSETNX", hsetnxCommand, CMD_WRITE},
 		redisCommand{"HMSET", hsetCommand, CMD_WRITE},
 		redisCommand{"HDEL", hdelCommand, CMD_WRITE},
+		redisCommand{"ZADD", zaddCommand, CMD_WRITE},
+		redisCommand{"ZREM", zremCommand, CMD_WRITE},
 		redisCommand{"DEL", delCommand, CMD_WRITE},
 		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
@@ -208,6 +213,7 @@ func (s *server) newClient(conn *net.TCPConn) *client {
 		querybuf:     make([]byte, 1024),
 		multibulklen: 0,
 		bulklen:      -1,
+		replybuf:     nil,
 		cmd:          nil,
 		tx:           nil}
 }
@@ -364,11 +370,15 @@ func (c *client) addReply(s []byte) {
 }
 
 func (c *client) addReplyBulk(s []byte) {
-	c.wBuffer.Write(shared.bulkhead)
-	c.wBuffer.Write([]byte(strconv.Itoa(len(s)))) // not efficient
-	c.wBuffer.Write(shared.crlf)
-	c.wBuffer.Write(s)
-	c.wBuffer.Write(shared.crlf)
+	if c.replybuf == nil {
+		c.wBuffer.Write(shared.bulkhead)
+		c.wBuffer.Write([]byte(strconv.Itoa(len(s)))) // not efficient
+		c.wBuffer.Write(shared.crlf)
+		c.wBuffer.Write(s)
+		c.wBuffer.Write(shared.crlf)
+	} else {
+		c.replybuf = append(c.replybuf, s)
+	}
 }
 
 func (c *client) addReplyLongLong(ll int) {
@@ -377,10 +387,31 @@ func (c *client) addReplyLongLong(ll int) {
 	c.wBuffer.Write(shared.crlf)
 }
 
+func (c *client) addReplyDouble(d float64) {
+	s := strconv.FormatFloat(d, 'g', -1, 64)
+	c.addReplyBulk([]byte(s))
+}
+
 func (c *client) addReplyMultiBulkLen(ll int) {
 	c.wBuffer.Write(shared.arrayhead)
 	c.wBuffer.Write([]byte(strconv.Itoa(ll))) // not efficient
 	c.wBuffer.Write(shared.crlf)
+}
+
+func (c *client) addDeferredMultiBulkLength() {
+	c.replybuf = make([][]byte, 1)
+}
+
+func (c *client) setDeferredMultiBulkLength(ll int) {
+	replies := c.replybuf[1:]
+	c.replybuf = nil
+	if ll != len(replies) {
+		panic("setDeferredMultiBulkLength: length does not match!")
+	}
+	c.addReplyMultiBulkLen(ll)
+	for _, r := range replies {
+		c.addReplyBulk(r)
+	}
 }
 
 func (c *client) addReplyError(err []byte) {
