@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"math"
 	"math/rand"
 	"pmem/transaction"
 	"sort"
@@ -176,12 +177,8 @@ func fnvhash(key []byte) int {
 
 func dumbhash(key []byte) int {
 	h := 0
-	for i,n := range(key) {
-		x := int(n)
-		for ; i < len(key); i++ {
-			x *= 10
-		}
-		h += x
+	for i, n := range key {
+		h += int(math.Pow10(len(key)-i-1)) * int(n-'0')
 	}
 	return h
 }

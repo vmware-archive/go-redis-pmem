@@ -248,8 +248,16 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 		if o == nil {
 			break
 		}
-		switch d := o.(type) {
+		var d *dict
+		switch v := o.(type) {
 		case *dict:
+			d = v
+		case *zset:
+			d = v.dict
+		default:
+			rehash = false
+		}
+		if d != nil {
 			if d.rehashIdx == -1 {
 				_, _, size1 := d.resizeIfNeeded(tx)
 				if size1 == 0 {
@@ -263,8 +271,6 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 			} else {
 				d.rehashStep(tx)
 			}
-		default:
-			rehash = false
 		}
 		tx.Commit()
 	}

@@ -2,6 +2,7 @@ package redis
 
 import (
 	"bytes"
+	"math/rand"
 	"pmem/transaction"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ const (
 	ZADD_CH = (1 << 16)
 
 	ZSKIPLIST_MAXLEVEL = 32
+	ZSKIPLIST_P        = 0.25
 )
 
 func (zs *zset) swizzle(tx transaction.TX) {
@@ -67,19 +69,26 @@ func (zsl *zskiplist) swizzle(tx transaction.TX) {
 	inPMem(unsafe.Pointer(zsl))
 	inPMem(unsafe.Pointer(zsl.header))
 	inPMem(unsafe.Pointer(zsl.tail))
-	for i := 0; i < zsl.level; i++ {
-		var b *zskiplistNode
-		x := zsl.header.level[i].forward
-		for x != nil {
-			inPMem(unsafe.Pointer(x))
-			inPMem(unsafe.Pointer(&(x.ele[0])))
-			inPMem(unsafe.Pointer(x.backward))
-			if x.backward != b {
-				panic("skiplist backward does not match!")
-			}
-			b = x
-			x = x.level[i].forward
+	length := uint(0)
+	var b *zskiplistNode
+	x := zsl.header.level[0].forward
+	for x != nil {
+		inPMem(unsafe.Pointer(x))
+		inPMem(unsafe.Pointer(&(x.ele[0])))
+		inPMem(unsafe.Pointer(x.backward))
+		if x.backward != b {
+			panic("skiplist backward does not match!")
 		}
+		for _, l := range x.level {
+			inPMem(unsafe.Pointer(l.forward))
+		}
+		b = x
+		x = x.level[0].forward
+		length++
+	}
+	if length != zsl.length {
+		print(length, zsl.length)
+		panic("skiplist length does not match!")
 	}
 }
 
@@ -177,7 +186,7 @@ func zaddGenericCommand(c *client, flags int) {
 		score = scores[j]
 
 		ele := c.argv[scoreidx+1+j*2]
-		retval, newscore, retflags := zsetAdd(c.tx, zobj, score, ele, flags)
+		retval, newscore, retflags := zsetAdd(c, zobj, score, ele, flags)
 		if retval == 0 {
 			c.addReplyError(nanerr)
 			goto cleanup
@@ -226,7 +235,7 @@ func zremCommand(c *client) {
 	deleted := 0
 	keyremoved := false
 	for j := 2; j < c.argc; j++ {
-		if zsetDel(c.tx, zobj, c.argv[j]) {
+		if zsetDel(c, zobj, c.argv[j]) {
 			deleted++
 		}
 		if zsetLength(zobj) == 0 {
@@ -391,7 +400,7 @@ func zsetCreate(tx transaction.TX) *zset {
 	return zs
 }
 
-func zsetAdd(tx transaction.TX, zobj interface{}, score float64, ele []byte, flags int) (int, float64, int) {
+func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) (int, float64, int) {
 	incr := (flags & ZADD_INCR) != 0
 	nx := (flags & ZADD_NX) != 0
 	xx := (flags & ZADD_XX) != 0
@@ -414,17 +423,18 @@ func zsetAdd(tx transaction.TX, zobj interface{}, score float64, ele []byte, fla
 
 			/* Remove and re-insert when score changes. */
 			if score != curscore {
-				node := zs.zsl.delete(tx, curscore, ele)
-				zs.zsl.insert(tx, score, node.ele)
-				tx.Log(de)
+				node := zs.zsl.delete(c.tx, curscore, ele)
+				zs.zsl.insert(c.tx, score, node.ele)
+				c.tx.Log(de)
 				de.value = score // Change dictionary value to directly store score value instead of pointer to score in zsl.
 				flags |= ZADD_UPDATED
 			}
 			return 1, score, flags
 		} else if !xx {
 			ele = shadowCopyToPmem(ele)
-			zs.zsl.insert(tx, score, ele)
-			zs.dict.set(tx, ele, score)
+			zs.zsl.insert(c.tx, score, ele)
+			zs.dict.set(c.tx, ele, score)
+			go hashTypeBgResize(c.db, c.argv[1])
 			return 1, score, flags | ZADD_ADDED
 		} else {
 			return 1, 0, flags | ZADD_NOP
@@ -435,17 +445,18 @@ func zsetAdd(tx transaction.TX, zobj interface{}, score float64, ele []byte, fla
 
 }
 
-func zsetDel(tx transaction.TX, zobj interface{}, ele []byte) bool {
+func zsetDel(c *client, zobj interface{}, ele []byte) bool {
 	switch zs := zobj.(type) {
 	case *zset:
-		de := zs.dict.delete(tx, ele)
+		de := zs.dict.delete(c.tx, ele)
 		if de != nil {
 			score := de.value.(float64)
-			retvalue := zs.zsl.delete(tx, score, ele)
+			retvalue := zs.zsl.delete(c.tx, score, ele)
 			if retvalue == nil {
 				panic("Zset dict and skiplist does not match!")
 			}
 			// TODO: resize
+			go hashTypeBgResize(c.db, c.argv[1])
 			return true
 		}
 	default:
@@ -483,7 +494,16 @@ func zslCreateNode(tx transaction.TX, level int, score float64, ele []byte) *zsk
 
 func zslRandomLevel() int {
 	level := 1
-	return level
+	t := ZSKIPLIST_P * 0xFFFF
+	ti := uint32(t)
+	for rand.Uint32()&0xFFFF < ti {
+		level++
+	}
+	if level < ZSKIPLIST_MAXLEVEL {
+		return level
+	} else {
+		return ZSKIPLIST_MAXLEVEL
+	}
 }
 
 func zslParseRange(min, max []byte) (spec zrangespec, err error) {
