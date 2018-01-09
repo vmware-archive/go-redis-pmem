@@ -10,7 +10,7 @@ import (
 	"runtime"
 	_ "runtime/debug"
 	"strconv"
-	_ "strings"
+	"strings"
 	_ "time"
 	"unsafe"
 )
@@ -83,6 +83,7 @@ var (
 		redisCommand{"ZREVRANGEBYSCORE", zrevrangebyscoreCommand, CMD_READONLY},
 		redisCommand{"EXISTS", existsCommand, CMD_READONLY},
 		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
+		redisCommand{"SELECT", selectCommand, CMD_READONLY},
 		redisCommand{"RANDOMKEY", randomkeyCommand, CMD_READONLY},
 		redisCommand{"STRLEN", strlenCommand, CMD_READONLY},
 		redisCommand{"TTL", ttlCommand, CMD_READONLY},
@@ -225,29 +226,38 @@ func (c *client) processInput() {
 	finish := false // finish processing a query
 	for {
 		n, err := c.conn.Read(c.querybuf[pos:])
-		if err != nil {
+		if err != nil { // TODO: check error
+			fmt.Println("Reading from client:", err)
+			return
+		}
+		if n == 0 {
+			fmt.Println("Client closed connection")
 			return
 		}
 
+		//fmt.Printf("%d, %d, %d, %q\n", pos, curr, n, string(c.querybuf[pos:pos+n]))
 		pos += n
 		//fmt.Println("Input buffer ", pos, n, len(c.querybuf), curr)
-		//fmt.Printf("%q\n", string(c.querybuf))
 
 		// process multi bulk buffer
 		curr, finish = c.processMultibulkBuffer(curr, pos)
 		for finish {
 			// Get one full query
 			if c.argc > 0 {
+				//fmt.Println("Process command")
 				c.processCommand()
 			}
 			c.reset()
 			curr, finish = c.processMultibulkBuffer(curr, pos)
 		}
 
-		// rewind query buffer if full.
+		// expand query buffer if full. TODO: set max query buffer length.
 		if pos == len(c.querybuf) {
-			copy(c.querybuf, c.querybuf[curr:])
-			pos -= curr
+			//fmt.Println("Rewind input buffer of ", curr)
+			c.querybuf = append(c.querybuf, make([]byte, 16*1024)...)
+		}
+		if pos == curr {
+			pos = 0
 			curr = 0
 		}
 	}
@@ -353,7 +363,7 @@ func (c *client) processCommand() {
 }
 
 func (c *client) lookupCommand() {
-	c.cmd = c.s.commands[(string(c.argv[0]))]
+	c.cmd = c.s.commands[strings.ToUpper(string(c.argv[0]))]
 }
 
 func (c *client) notSupported() {

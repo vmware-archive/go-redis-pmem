@@ -8,6 +8,7 @@ import (
 	"pmem/redis"
 	"pmem/region"
 	"pmem/transaction"
+	"runtime"
 	"unsafe"
 )
 
@@ -82,6 +83,8 @@ func main() {
 		}
 		transaction.Release(t)
 	*/
+	runtime.SetMutexProfileFraction(10)
+	runtime.SetBlockProfileRate(1)
 	go redis.RunServer()
 	http.ListenAndServe(":8080", nil)
 }

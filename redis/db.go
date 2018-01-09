@@ -104,6 +104,11 @@ func flushdbCommand(c *client) {
 	c.addReply(shared.ok)
 }
 
+func selectCommand(c *client) {
+	// TODO: not implemented
+	c.addReply(shared.ok)
+}
+
 func randomkeyCommand(c *client) {
 	c.db.dict.lockAllKeys(c.tx)
 	if k := c.db.randomKey(); k != nil {

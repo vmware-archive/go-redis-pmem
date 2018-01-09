@@ -145,6 +145,9 @@ func setrangeCommand(c *client) {
 		c.addReplyLongLong(len(v))
 	} else {
 		needed := offset + len(update)
+		if !checkStringLength(c, needed) {
+			return
+		}
 		if needed > len(v) {
 			newv := pmake([]byte, needed)
 			copy(newv, v)
@@ -173,7 +176,7 @@ func getrangeCommand(c *client) {
 	var v []byte
 	var ok bool
 	if c.db.lockKeyRead(c.tx, c.argv[1]) { // not expired
-		v, ok = c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+		v, ok = c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptybulk, shared.wrongtypeerr)
 		if v == nil || !ok {
 			return
 		}
@@ -265,12 +268,15 @@ func appendCommand(c *client) {
 		totlen = len(c.argv[2])
 	} else {
 		/* Append the value */
-		newv := pmake([]byte, len(v)+len(c.argv[2]))
+		totlen = len(v) + len(c.argv[2])
+		if !checkStringLength(c, totlen) {
+			return
+		}
+		newv := pmake([]byte, totlen)
 		copy(newv, v)
 		copy(newv[len(v):], c.argv[2])
-		transaction.Persist(unsafe.Pointer(&newv[0]), len(newv)) // shadow update
-		totlen = len(newv)
-		c.db.setKey(c.tx, c.argv[1], newv) // no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
+		transaction.Persist(unsafe.Pointer(&newv[0]), totlen) // shadow update
+		c.db.setKey(c.tx, c.argv[1], newv)                    // no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
 	}
 	c.addReplyLongLong(totlen)
 }
@@ -284,4 +290,12 @@ func strlenCommand(c *client) {
 	} else { // expired
 		c.addReply(shared.czero)
 	}
+}
+
+func checkStringLength(c *client, len int) bool {
+	if len > 512*1024*1024 {
+		c.addReplyError([]byte("string exceeds maximum allowed size (512MB)"))
+		return false
+	}
+	return true
 }
