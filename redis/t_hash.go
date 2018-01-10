@@ -39,7 +39,7 @@ func hsetCommand(c *client) {
 		return
 	}
 
-	created := 0
+	var created int64
 	for i := 2; i < c.argc; i += 2 {
 		if !hashTypeSet(c, o, c.argv[i], c.argv[i+1]) {
 			created++
@@ -81,7 +81,7 @@ func hmgetCommand(c *client) {
 }
 
 func hdelCommand(c *client) {
-	deleted := 0
+	var deleted int64
 	removed := false
 	c.db.lockKeyWrite(c.tx, c.argv[1])
 	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
@@ -109,7 +109,7 @@ func hlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
 		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
 		if ok && o != nil {
-			c.addReplyLongLong(hashTypeLength(o))
+			c.addReplyLongLong(int64(hashTypeLength(o)))
 		}
 	} else { // expired
 		c.addReply(shared.czero)
@@ -120,7 +120,7 @@ func hstrlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
 		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
 		if ok && o != nil {
-			c.addReplyLongLong(hashTypeGetValueLength(o, c.argv[2]))
+			c.addReplyLongLong(int64(hashTypeGetValueLength(o, c.argv[2])))
 		}
 	} else { // expired
 		c.addReply(shared.czero)

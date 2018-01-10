@@ -64,7 +64,7 @@ func (db *redisDb) swizzle(tx transaction.TX) {
 }
 
 func existsCommand(c *client) {
-	count := 0
+	var count int64
 
 	alive := c.db.lockKeysRead(c.tx, c.argv[1:], 1)
 
@@ -79,7 +79,7 @@ func existsCommand(c *client) {
 }
 
 func delCommand(c *client) {
-	count := 0
+	var count int64
 
 	c.db.lockKeysWrite(c.tx, c.argv[1:], 1)
 
@@ -94,7 +94,7 @@ func delCommand(c *client) {
 
 func dbsizeCommand(c *client) {
 	c.db.dict.lockAllKeys(c.tx)
-	c.addReplyLongLong(c.db.dict.size())
+	c.addReplyLongLong(int64(c.db.dict.size()))
 }
 
 func flushdbCommand(c *client) {
@@ -224,8 +224,8 @@ func pexpireatCommand(c *client) {
 }
 
 func expireGeneric(c *client, base time.Time, d time.Duration) {
-	when, err := slice2i(c.argv[2])
-	if err != nil {
+	when, ok := c.getLongLongOrReply(c.argv[2], nil)
+	if !ok {
 		return
 	}
 
@@ -319,11 +319,11 @@ func ttlGeneric(c *client, ms bool) {
 		c.addReplyLongLong(-1)
 	} else {
 		if ms {
-			ttl = ttl / 1000000
+			ttl = (ttl + 500000) / 1000000
 		} else {
-			ttl = ttl / 1000000000
+			ttl = (ttl + 500000000) / 1000000000
 		}
-		c.addReplyLongLong(int(ttl))
+		c.addReplyLongLong(ttl)
 	}
 }
 

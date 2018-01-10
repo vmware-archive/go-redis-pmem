@@ -3,6 +3,7 @@ package redis
 import (
 	_ "fmt"
 	"pmem/transaction"
+	"strconv"
 	"unsafe"
 )
 
@@ -18,11 +19,81 @@ func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte)
 		return v, true
 	case *[]byte:
 		return *v, true
+	case float64:
+		return []byte(strconv.FormatFloat(v, 'f', 17, 64)), true
+	case int64:
+		return []byte(strconv.FormatInt(v, 10)), true
 	default:
 		if errmsg != nil {
 			c.addReply(errmsg)
 		}
 		return nil, false
+	}
+}
+
+func (c *client) getLongLongOrReply(i interface{}, errmsg []byte) (int64, bool) {
+	if i == nil {
+		return int64(0), true
+	}
+	switch v := i.(type) {
+	case int64:
+		return v, true
+	case []byte:
+		i, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil {
+			c.addReplyError([]byte("value is not an integer or out of range"))
+			return int64(0), false
+		} else {
+			return i, true
+		}
+	case *[]byte:
+		i, err := strconv.ParseInt(string(*v), 10, 64)
+		if err != nil {
+			c.addReplyError([]byte("value is not an integer or out of range"))
+			return int64(0), false
+		} else {
+			return i, true
+		}
+	default:
+		if errmsg != nil {
+			c.addReply(errmsg)
+		} else {
+			c.addReplyError([]byte("value is not an integer or out of range"))
+		}
+		return int64(0), false
+	}
+}
+
+func (c *client) getLongDoubleOrReply(i interface{}, errmsg []byte) (float64, bool) {
+	if i == nil {
+		return float64(0), true
+	}
+	switch v := i.(type) {
+	case float64:
+		return v, true
+	case []byte:
+		i, err := strconv.ParseFloat(string(v), 64)
+		if err != nil {
+			c.addReplyError([]byte("value is not a valid float"))
+			return float64(0), false
+		} else {
+			return i, true
+		}
+	case *[]byte:
+		i, err := strconv.ParseFloat(string(*v), 64)
+		if err != nil {
+			c.addReplyError([]byte("value is not a valid float"))
+			return float64(0), false
+		} else {
+			return i, true
+		}
+	default:
+		if errmsg != nil {
+			c.addReply(errmsg)
+		} else {
+			c.addReplyError([]byte("value is not a valid float"))
+		}
+		return float64(0), false
 	}
 }
 

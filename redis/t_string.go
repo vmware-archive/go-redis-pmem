@@ -2,7 +2,9 @@ package redis
 
 import (
 	_ "fmt"
+	"math"
 	"pmem/transaction"
+	"strconv"
 	"time"
 	"unsafe"
 )
@@ -63,8 +65,8 @@ func psetexCommand(c *client) {
 func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, okReply, abortReply []byte) {
 	var ns int64 = -1
 	if expire != nil {
-		t, err := c.getLongLongFromObjectOrReply(expire, nil)
-		if err != nil {
+		t, ok := c.getLongLongOrReply(expire, nil)
+		if !ok {
 			return
 		}
 		if t <= 0 {
@@ -142,7 +144,7 @@ func setrangeCommand(c *client) {
 	}
 
 	if len(update) == 0 { // no updates
-		c.addReplyLongLong(len(v))
+		c.addReplyLongLong(int64(len(v)))
 	} else {
 		needed := offset + len(update)
 		if !checkStringLength(c, needed) {
@@ -154,11 +156,11 @@ func setrangeCommand(c *client) {
 			copy(newv[offset:], update)
 			transaction.Persist(unsafe.Pointer(&newv[0]), len(newv)) // shadow update
 			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), newv)
-			c.addReplyLongLong(needed)
+			c.addReplyLongLong(int64(needed))
 		} else {
 			c.tx.Log(v[offset:needed]) // inline update needs to be logged
 			copy(v[offset:], update)
-			c.addReplyLongLong(len(v))
+			c.addReplyLongLong(int64(len(v)))
 		}
 	}
 }
@@ -278,14 +280,14 @@ func appendCommand(c *client) {
 		transaction.Persist(unsafe.Pointer(&newv[0]), totlen) // shadow update
 		c.db.setKey(c.tx, c.argv[1], newv)                    // no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
 	}
-	c.addReplyLongLong(totlen)
+	c.addReplyLongLong(int64(totlen))
 }
 
 func strlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
 		v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
 		if v != nil {
-			c.addReplyLongLong(len(v))
+			c.addReplyLongLong(int64(len(v)))
 		}
 	} else { // expired
 		c.addReply(shared.czero)
@@ -298,4 +300,65 @@ func checkStringLength(c *client, len int) bool {
 		return false
 	}
 	return true
+}
+
+func incrCommand(c *client) {
+	incrDecrCommand(c, 1)
+}
+
+func decrCommand(c *client) {
+	incrDecrCommand(c, -1)
+}
+
+func incrbyCommand(c *client) {
+	incr, ok := c.getLongLongOrReply(c.argv[2], nil)
+	if ok {
+		incrDecrCommand(c, incr)
+	}
+}
+
+func decrbyCommand(c *client) {
+	incr, ok := c.getLongLongOrReply(c.argv[2], nil)
+	if ok {
+		incrDecrCommand(c, -incr)
+	}
+}
+
+func incrDecrCommand(c *client, incr int64) {
+	c.db.lockKeyWrite(c.tx, c.argv[1])
+	v, ok := c.getLongLongOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil)
+	if !ok {
+		return
+	}
+
+	if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
+		(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
+		c.addReplyError([]byte("increment or decrement would overflow"))
+		return
+	}
+
+	v += incr
+
+	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v) //TODO: use shared integers?
+	c.addReplyLongLong(v)
+}
+
+func incrbyfloatCommand(c *client) {
+	c.db.lockKeyWrite(c.tx, c.argv[1])
+	v, ok := c.getLongDoubleOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil)
+	if !ok {
+		return
+	}
+	incr, ok := c.getLongDoubleOrReply(c.argv[2], nil)
+	if !ok {
+		return
+	}
+
+	v += incr
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		c.addReplyError([]byte("increment would produce NaN or Infinity"))
+		return
+	}
+	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
+	c.addReplyBulk([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
 }

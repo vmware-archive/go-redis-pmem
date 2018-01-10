@@ -97,6 +97,11 @@ var (
 		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
 		redisCommand{"MSET", msetCommand, CMD_WRITE},
 		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE},
+		redisCommand{"INCR", incrCommand, CMD_WRITE},
+		redisCommand{"INCRBY", incrbyCommand, CMD_WRITE},
+		redisCommand{"INCRBYFLOAT", incrbyfloatCommand, CMD_WRITE},
+		redisCommand{"DECR", decrCommand, CMD_WRITE},
+		redisCommand{"DECRBY", decrbyCommand, CMD_WRITE},
 		redisCommand{"HSET", hsetCommand, CMD_WRITE},
 		redisCommand{"HSETNX", hsetnxCommand, CMD_WRITE},
 		redisCommand{"HMSET", hsetCommand, CMD_WRITE},
@@ -391,9 +396,9 @@ func (c *client) addReplyBulk(s []byte) {
 	}
 }
 
-func (c *client) addReplyLongLong(ll int) {
+func (c *client) addReplyLongLong(ll int64) {
 	c.wBuffer.Write(shared.inthead)
-	c.wBuffer.Write([]byte(strconv.Itoa(ll))) // not efficient
+	c.wBuffer.Write([]byte(strconv.FormatInt(ll, 10))) // not efficient
 	c.wBuffer.Write(shared.crlf)
 }
 
@@ -428,22 +433,6 @@ func (c *client) addReplyError(err []byte) {
 	c.wBuffer.Write([]byte("-ERR "))
 	c.wBuffer.Write(err)
 	c.wBuffer.Write(shared.crlf)
-}
-
-func (c *client) getLongLongFromObjectOrReply(o, msg []byte) (int64, error) {
-	i, err := getLongLongFromObject(o)
-	if err != nil {
-		if msg != nil {
-			c.addReplyError(msg)
-		} else {
-			c.addReplyError([]byte("value is not an integer or out of range"))
-		}
-	}
-	return i, err
-}
-
-func getLongLongFromObject(o []byte) (int64, error) {
-	return strconv.ParseInt(string(o), 10, 64)
 }
 
 func (c *client) cleanup() {

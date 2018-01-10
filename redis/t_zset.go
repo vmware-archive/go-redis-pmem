@@ -147,8 +147,8 @@ func zaddGenericCommand(c *client, flags int) {
 	var zobj interface{}
 	var err error
 	var score float64
-	added := 0
-	updated := 0
+	var added int64
+	var updated int64
 	processed := 0
 
 	/* Start parsing all the scores, we need to emit any syntax error
@@ -232,7 +232,7 @@ func zremCommand(c *client) {
 		return
 	}
 
-	deleted := 0
+	var deleted int64
 	keyremoved := false
 	for j := 2; j < c.argc; j++ {
 		if zsetDel(c, zobj, c.argv[j]) {
