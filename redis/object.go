@@ -8,10 +8,23 @@ import (
 )
 
 func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte) ([]byte, bool) {
-	if i == nil {
-		if emptymsg != nil {
+	s, ok := getString(i)
+	if !ok {
+		if errmsg != nil {
+			c.addReply(errmsg)
+		} else {
+			c.addReply(shared.wrongtypeerr)
+		}
+	} else {
+		if emptymsg != nil && s == nil {
 			c.addReply(emptymsg)
 		}
+	}
+	return s, ok
+}
+
+func getString(i interface{}) ([]byte, bool) {
+	if i == nil {
 		return nil, true
 	}
 	switch v := i.(type) {
@@ -24,14 +37,23 @@ func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte)
 	case int64:
 		return []byte(strconv.FormatInt(v, 10)), true
 	default:
-		if errmsg != nil {
-			c.addReply(errmsg)
-		}
 		return nil, false
 	}
 }
 
 func (c *client) getLongLongOrReply(i interface{}, errmsg []byte) (int64, bool) {
+	ll, ok := getLongLong(i)
+	if !ok {
+		if errmsg != nil {
+			c.addReply(errmsg)
+		} else {
+			c.addReplyError([]byte("value is not an integer or out of range"))
+		}
+	}
+	return ll, ok
+}
+
+func getLongLong(i interface{}) (int64, bool) {
 	if i == nil {
 		return int64(0), true
 	}
@@ -41,7 +63,6 @@ func (c *client) getLongLongOrReply(i interface{}, errmsg []byte) (int64, bool) 
 	case []byte:
 		i, err := strconv.ParseInt(string(v), 10, 64)
 		if err != nil {
-			c.addReplyError([]byte("value is not an integer or out of range"))
 			return int64(0), false
 		} else {
 			return i, true
@@ -49,22 +70,28 @@ func (c *client) getLongLongOrReply(i interface{}, errmsg []byte) (int64, bool) 
 	case *[]byte:
 		i, err := strconv.ParseInt(string(*v), 10, 64)
 		if err != nil {
-			c.addReplyError([]byte("value is not an integer or out of range"))
 			return int64(0), false
 		} else {
 			return i, true
 		}
 	default:
-		if errmsg != nil {
-			c.addReply(errmsg)
-		} else {
-			c.addReplyError([]byte("value is not an integer or out of range"))
-		}
 		return int64(0), false
 	}
 }
 
 func (c *client) getLongDoubleOrReply(i interface{}, errmsg []byte) (float64, bool) {
+	f, ok := getLongDouble(i)
+	if !ok {
+		if errmsg != nil {
+			c.addReply(errmsg)
+		} else {
+			c.addReplyError([]byte("value is not a valid float"))
+		}
+	}
+	return f, ok
+}
+
+func getLongDouble(i interface{}) (float64, bool) {
 	if i == nil {
 		return float64(0), true
 	}
@@ -74,7 +101,6 @@ func (c *client) getLongDoubleOrReply(i interface{}, errmsg []byte) (float64, bo
 	case []byte:
 		i, err := strconv.ParseFloat(string(v), 64)
 		if err != nil {
-			c.addReplyError([]byte("value is not a valid float"))
 			return float64(0), false
 		} else {
 			return i, true
@@ -82,17 +108,11 @@ func (c *client) getLongDoubleOrReply(i interface{}, errmsg []byte) (float64, bo
 	case *[]byte:
 		i, err := strconv.ParseFloat(string(*v), 64)
 		if err != nil {
-			c.addReplyError([]byte("value is not a valid float"))
 			return float64(0), false
 		} else {
 			return i, true
 		}
 	default:
-		if errmsg != nil {
-			c.addReply(errmsg)
-		} else {
-			c.addReplyError([]byte("value is not a valid float"))
-		}
 		return float64(0), false
 	}
 }

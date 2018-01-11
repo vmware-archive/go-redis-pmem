@@ -4,7 +4,11 @@ package redis
  * Therefore, there is no extra lock required for field access within the hash value.
  * However, the outter lock also prevents concurrent writes or read/write into the same hash value. */
 
-import "pmem/transaction"
+import (
+	"math"
+	"pmem/transaction"
+	"strconv"
+)
 
 type hashTypeIterator struct {
 	subject interface{}
@@ -21,7 +25,7 @@ func hsetnxCommand(c *client) {
 	if hashTypeExists(o, c.argv[2]) {
 		c.addReply(shared.czero)
 	} else {
-		hashTypeSet(c, o, c.argv[2], c.argv[3])
+		hashTypeSet(c, o, shadowCopyToPmem(c.argv[2]), shadowCopyToPmemI(c.argv[3]))
 		c.addReply(shared.cone)
 	}
 }
@@ -41,7 +45,7 @@ func hsetCommand(c *client) {
 
 	var created int64
 	for i := 2; i < c.argc; i += 2 {
-		if !hashTypeSet(c, o, c.argv[i], c.argv[i+1]) {
+		if !hashTypeSet(c, o, shadowCopyToPmem(c.argv[i]), shadowCopyToPmemI(c.argv[i+1])) {
 			created++
 		}
 	}
@@ -56,8 +60,7 @@ func hsetCommand(c *client) {
 
 func hgetCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
-		if ok {
+		if o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr); ok {
 			c.addHashFieldToReply(o, c.argv[2])
 		}
 	} else { // expired
@@ -69,8 +72,7 @@ func hmgetCommand(c *client) {
 	var o interface{}
 	var ok bool
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
-		if !ok {
+		if o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr); !ok {
 			return
 		}
 	}
@@ -178,6 +180,41 @@ func hexistsCommand(c *client) {
 	}
 }
 
+func hincrbyCommand(c *client) {
+	if incr, ok := c.getLongLongOrReply(c.argv[3], nil); ok {
+		c.db.lockKeyWrite(c.tx, c.argv[1])
+		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
+
+		if v, ok := c.getLongLongOrReply(hashTypeGetValue(o, c.argv[2]), []byte("-ERR hash value is not an integer\r\n")); ok {
+			if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
+				(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
+				c.addReplyError([]byte("increment or decrement would overflow"))
+				return
+			}
+			v += incr
+			hashTypeSet(c, o, shadowCopyToPmem(c.argv[2]), v)
+			c.addReplyLongLong(v)
+		}
+	}
+}
+
+func hincrbyfloatCommand(c *client) {
+	if incr, ok := c.getLongDoubleOrReply(c.argv[3], nil); ok {
+		c.db.lockKeyWrite(c.tx, c.argv[1])
+		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
+
+		if v, ok := c.getLongDoubleOrReply(hashTypeGetValue(o, c.argv[2]), []byte("-ERR hash value is not a float\r\n")); ok {
+			v += incr
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				c.addReplyError([]byte("increment would produce NaN or Infinity"))
+				return
+			}
+			hashTypeSet(c, o, shadowCopyToPmem(c.argv[2]), v)
+			c.addReplyBulk([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
+		}
+	}
+}
+
 /*============== helper functions ====================*/
 
 func hashTypeLookupWriteOrCreate(c *client, key []byte) interface{} {
@@ -204,17 +241,17 @@ func hashTypeExists(o interface{}, field []byte) bool {
 	}
 }
 
-func hashTypeSet(c *client, o interface{}, field, value []byte) bool {
+func hashTypeSet(c *client, o interface{}, field []byte, value interface{}) bool {
 	var update bool
 	switch d := o.(type) {
 	case *dict:
 		_, _, _, de := d.find(field)
 		if de != nil {
-			c.tx.Log(de)
-			de.value = shadowCopyToPmemI(value)
+			c.tx.Log(&de.value)
+			de.value = value
 			update = true
 		} else {
-			d.set(c.tx, shadowCopyToPmem(field), shadowCopyToPmemI(value))
+			d.set(c.tx, field, value)
 			go hashTypeBgResize(c.db, c.argv[1])
 		}
 	default:
@@ -289,11 +326,20 @@ func hashTypeLength(o interface{}) int {
 	return length
 }
 
+func hashTypeGetValue(o interface{}, field []byte) interface{} {
+	switch h := o.(type) {
+	case *dict:
+		return hashTypeGetFromHashTable(h, field)
+	default:
+		panic("Unknown hash encoding")
+	}
+}
+
 func hashTypeGetValueLength(o interface{}, field []byte) int {
 	length := 0
 	switch d := o.(type) {
 	case *dict:
-		v := hashTypeGetFromHashTable(d, field)
+		v, _ := getString(hashTypeGetFromHashTable(d, field))
 		length = len(v)
 	default:
 		panic("Unknown hash encoding")
@@ -301,17 +347,12 @@ func hashTypeGetValueLength(o interface{}, field []byte) int {
 	return length
 }
 
-func hashTypeGetFromHashTable(d *dict, key []byte) []byte {
+func hashTypeGetFromHashTable(d *dict, key []byte) interface{} {
 	_, _, _, de := d.find(key)
 	if de == nil {
 		return nil
 	} else {
-		switch v := de.value.(type) {
-		case *[]byte:
-			return *v
-		default:
-			panic("Unknown hash value encoding")
-		}
+		return de.value
 	}
 }
 
@@ -340,11 +381,11 @@ func (hi *hashTypeIterator) hashTypeNext() bool {
 	return true
 }
 
-func (hi *hashTypeIterator) hashTypeCurrentFromHashTable() ([]byte, []byte) {
+func (hi *hashTypeIterator) hashTypeCurrentFromHashTable() ([]byte, interface{}) {
 	if hi.de == nil {
 		return nil, nil
 	}
-	return hi.de.key, *hi.de.value.(*[]byte)
+	return hi.de.key, hi.de.value
 }
 
 func (c *client) addHashIteratorCursorToReply(hi *hashTypeIterator, getK, getV bool) {
@@ -355,7 +396,9 @@ func (c *client) addHashIteratorCursorToReply(hi *hashTypeIterator, getK, getV b
 			c.addReplyBulk(key)
 		}
 		if getV {
-			c.addReplyBulk(value)
+			if s, ok := getString(value); ok {
+				c.addReplyBulk(s)
+			}
 		}
 	default:
 		panic("Unknown hash value encoding")
@@ -369,7 +412,7 @@ func (c *client) addHashFieldToReply(o interface{}, field []byte) {
 	}
 	switch d := o.(type) {
 	case *dict:
-		value := hashTypeGetFromHashTable(d, field)
+		value, _ := getString(hashTypeGetFromHashTable(d, field))
 		if value == nil {
 			c.addReply(shared.nullbulk)
 		} else {

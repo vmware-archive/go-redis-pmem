@@ -15,9 +15,9 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"runtime/debug"
 	"sync"
 	"unsafe"
-	"runtime/debug"
 )
 
 type (
@@ -34,6 +34,7 @@ type (
 		id         int         // transaction id
 		undoHdr    *undoHeader // transaction header
 		undoBuf    logBuffer   // volatile wrapper for log buffer
+		largeBuf   bool        // using large buffer or not
 		level      int         // tx level
 		undoEntry  entryHeader // volatile entry header
 		entrySlice []byte      // underlying raw byte slice of undoEntry
@@ -43,18 +44,20 @@ type (
 )
 
 const (
-	BUFFERSIZE int = 8 * 1024
+	LBUFFERSIZE = 128 * 1024
+	BUFFERSIZE  = 4 * 1024
 )
 
 var (
-	pool    chan *undoTx
-	undoOff uintptr // offset of undo area
+	pool    [2]chan *undoTx // pool[0] for small log buffers, pool[1] for large log buffers
+	undoOff uintptr         // offset of undo area
 )
 
-func initUndo(id int, logArea []byte) *undoTx {
+func initUndo(id int, largeBuf bool, logArea []byte) *undoTx {
 	t := new(undoTx)
 	t.id = id
 	t.undoHdr = (*undoHeader)(unsafe.Pointer(&logArea[0]))
+	t.largeBuf = largeBuf
 
 	var err error
 	t.undoBuf, err = initLinearUndoBuffer(logArea[unsafe.Sizeof(*t.undoHdr):], t.undoHdr.tail)
@@ -81,24 +84,46 @@ func InitUndo(logArea []byte) {
 	// init global variables
 	undoOff = uintptr(unsafe.Pointer(&logArea[0]))
 
-	max := len(logArea) / BUFFERSIZE
+	initPool(false, logArea[:len(logArea)/2])
+	initPool(true, logArea[len(logArea)/2:])
+}
+
+func initPool(largeBuf bool, logArea []byte) {
+	bufSize := 0
+	idx := 0
+	if largeBuf {
+		bufSize = LBUFFERSIZE
+		idx = 1
+	} else {
+		bufSize = BUFFERSIZE
+	}
+	max := len(logArea) / bufSize
 	if max == 0 {
 		log.Fatal("Not enough log area for initializing undo log! ", len(logArea))
 	}
 	// init transaction pool
-	pool = make(chan *undoTx, max)
+	pool[idx] = make(chan *undoTx, max)
 	for i := 0; i < max; i++ {
 		begin := len(logArea) / max * i
 		end := len(logArea) / max * (i + 1)
-		pool <- initUndo(i, logArea[begin:end])
+		pool[idx] <- initUndo(i, largeBuf, logArea[begin:end])
 	}
 }
 
 func NewUndo() TX {
-	if pool == nil {
+	if pool[0] == nil {
 		log.Fatal("Undo log not correctly initialized!")
 	}
-	t := <-pool
+	t := <-pool[0]
+	// log.Println("Get log ", t.id)
+	return t
+}
+
+func NewLargeUndo() TX {
+	if pool[1] == nil {
+		log.Fatal("Undo log not correctly initialized!")
+	}
+	t := <-pool[1]
 	// log.Println("Get log ", t.id)
 	return t
 }
@@ -106,7 +131,11 @@ func NewUndo() TX {
 func releaseUndo(t *undoTx) {
 	t.Abort()
 	// log.Println("Release log ", t.id)
-	pool <- t
+	if t.largeBuf {
+		pool[1] <- t
+	} else {
+		pool[0] <- t
+	}
 }
 
 func (t *undoTx) setUndoHdr(tail int) {
@@ -133,7 +162,7 @@ func (t *undoTx) Log(data interface{}) error {
 	ptr := unsafe.Pointer(v.Pointer())
 
 	// Append data to undo log buffer.
-	_, err := t.undoBuf.Write((*[BUFFERSIZE]byte)(ptr)[:bytes:bytes])
+	_, err := t.undoBuf.Write((*[LBUFFERSIZE]byte)(ptr)[:bytes:bytes])
 	if err != nil {
 		return err
 	}
@@ -175,6 +204,8 @@ func (t *undoTx) Commit() error {
 			t.undoBuf.Rewind(t.undoEntry.size)
 		}
 		if t.undoBuf.Tail() != 0 {
+			debug.PrintStack()
+			log.Fatal("tx.undo: buffer not correctly parsed when commit!", t.undoBuf.Tail())
 			return errors.New("tx.undo: buffer not correctly parsed when commit!")
 		}
 		t.setUndoHdr(0) // discard all logs.
@@ -191,7 +222,7 @@ func (t *undoTx) Abort() error {
 			return err
 		}
 		ptr := unsafe.Pointer(undoOff + t.undoEntry.offset)
-		_, err = t.undoBuf.Read((*[BUFFERSIZE]byte)(ptr)[:t.undoEntry.size:t.undoEntry.size])
+		_, err = t.undoBuf.Read((*[LBUFFERSIZE]byte)(ptr)[:t.undoEntry.size:t.undoEntry.size])
 		if err != nil {
 			return err
 		}

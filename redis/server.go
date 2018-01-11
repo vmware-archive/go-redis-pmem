@@ -61,8 +61,9 @@ const (
 	UUID     int    = 9524
 	PORT     string = ":6379"
 
-	CMD_WRITE    int = 1
-	CMD_READONLY int = 2
+	CMD_WRITE    int = 1 << 0
+	CMD_READONLY int = 1 << 1
+	CMD_LARGE    int = 1 << 2
 )
 
 var (
@@ -95,8 +96,8 @@ var (
 		redisCommand{"PSETEX", psetexCommand, CMD_WRITE},
 		redisCommand{"SETRANGE", setrangeCommand, CMD_WRITE},
 		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
-		redisCommand{"MSET", msetCommand, CMD_WRITE},
-		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE},
+		redisCommand{"MSET", msetCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"MSETNX", msetnxCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"INCR", incrCommand, CMD_WRITE},
 		redisCommand{"INCRBY", incrbyCommand, CMD_WRITE},
 		redisCommand{"INCRBYFLOAT", incrbyfloatCommand, CMD_WRITE},
@@ -104,11 +105,13 @@ var (
 		redisCommand{"DECRBY", decrbyCommand, CMD_WRITE},
 		redisCommand{"HSET", hsetCommand, CMD_WRITE},
 		redisCommand{"HSETNX", hsetnxCommand, CMD_WRITE},
-		redisCommand{"HMSET", hsetCommand, CMD_WRITE},
-		redisCommand{"HDEL", hdelCommand, CMD_WRITE},
-		redisCommand{"ZADD", zaddCommand, CMD_WRITE},
-		redisCommand{"ZREM", zremCommand, CMD_WRITE},
-		redisCommand{"DEL", delCommand, CMD_WRITE},
+		redisCommand{"HINCRBY", hincrbyCommand, CMD_WRITE},
+		redisCommand{"HINCRBYFLOAT", hincrbyfloatCommand, CMD_WRITE},
+		redisCommand{"HMSET", hsetCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"HDEL", hdelCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZADD", zaddCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZREM", zremCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"DEL", delCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
 		redisCommand{"EXPIREAT", expireatCommand, CMD_WRITE},
@@ -354,6 +357,8 @@ func (c *client) processCommand() {
 	} else {
 		if c.cmd.flag&CMD_READONLY > 0 {
 			c.tx = transaction.NewReadonly()
+		} else if c.cmd.flag&CMD_LARGE > 0 {
+			c.tx = transaction.NewLargeUndo()
 		} else {
 			c.tx = transaction.NewUndo()
 		}
@@ -372,11 +377,12 @@ func (c *client) lookupCommand() {
 }
 
 func (c *client) notSupported() {
-	fmt.Println("Command not supported!")
+	fmt.Print("Command not supported! ")
 	for _, q := range c.argv {
 		fmt.Print(string(q), " ")
 	}
-	c.addReply(shared.wrongtypeerr)
+	fmt.Print("\n")
+	c.addReply(shared.syntaxerr)
 	c.wBuffer.Flush()
 }
 

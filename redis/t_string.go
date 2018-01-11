@@ -285,8 +285,7 @@ func appendCommand(c *client) {
 
 func strlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
-		if v != nil {
+		if v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr); v != nil {
 			c.addReplyLongLong(int64(len(v)))
 		}
 	} else { // expired
@@ -311,54 +310,44 @@ func decrCommand(c *client) {
 }
 
 func incrbyCommand(c *client) {
-	incr, ok := c.getLongLongOrReply(c.argv[2], nil)
-	if ok {
+	if incr, ok := c.getLongLongOrReply(c.argv[2], nil); ok {
 		incrDecrCommand(c, incr)
 	}
 }
 
 func decrbyCommand(c *client) {
-	incr, ok := c.getLongLongOrReply(c.argv[2], nil)
-	if ok {
+	if incr, ok := c.getLongLongOrReply(c.argv[2], nil); ok {
 		incrDecrCommand(c, -incr)
 	}
 }
 
 func incrDecrCommand(c *client, incr int64) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v, ok := c.getLongLongOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil)
-	if !ok {
-		return
+	if v, ok := c.getLongLongOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); ok {
+		if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
+			(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
+			c.addReplyError([]byte("increment or decrement would overflow"))
+			return
+		}
+
+		v += incr
+
+		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v) //TODO: use shared integers?
+		c.addReplyLongLong(v)
 	}
-
-	if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
-		(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
-		c.addReplyError([]byte("increment or decrement would overflow"))
-		return
-	}
-
-	v += incr
-
-	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v) //TODO: use shared integers?
-	c.addReplyLongLong(v)
 }
 
 func incrbyfloatCommand(c *client) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v, ok := c.getLongDoubleOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil)
-	if !ok {
-		return
+	if v, ok := c.getLongDoubleOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); ok {
+		if incr, ok := c.getLongDoubleOrReply(c.argv[2], nil); ok {
+			v += incr
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				c.addReplyError([]byte("increment would produce NaN or Infinity"))
+				return
+			}
+			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
+			c.addReplyBulk([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
+		}
 	}
-	incr, ok := c.getLongDoubleOrReply(c.argv[2], nil)
-	if !ok {
-		return
-	}
-
-	v += incr
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		c.addReplyError([]byte("increment would produce NaN or Infinity"))
-		return
-	}
-	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
-	c.addReplyBulk([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
 }
