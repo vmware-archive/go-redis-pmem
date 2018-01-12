@@ -2,9 +2,9 @@ package redis
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"pmem/transaction"
-	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -37,6 +37,11 @@ type (
 		min, max     float64
 		minex, maxex bool
 	}
+
+	zlexrangespec struct {
+		min, max     []byte
+		minex, maxex bool
+	}
 )
 
 const (
@@ -54,6 +59,10 @@ const (
 
 	/* Flags only used by the ZADD command but not by zsetAdd() API: */
 	ZADD_CH = (1 << 16)
+
+	ZRANGE_RANK  = 0
+	ZRANGE_SCORE = 1
+	ZRANGE_LEX   = 2
 
 	ZSKIPLIST_MAXLEVEL = 32
 	ZSKIPLIST_P        = 0.25
@@ -95,6 +104,10 @@ func (zsl *zskiplist) swizzle(tx transaction.TX) {
 /*============== zset type commands ====================*/
 func zaddCommand(c *client) {
 	zaddGenericCommand(c, ZADD_NONE)
+}
+
+func zincrbyCommand(c *client) {
+	zaddGenericCommand(c, ZADD_INCR)
 }
 
 func zaddGenericCommand(c *client, flags int) {
@@ -140,12 +153,13 @@ func zaddGenericCommand(c *client, flags int) {
 	}
 
 	if incr && elements > 1 {
-		c.addReplyError([]byte("INCR option supports a single increment-element pair"))
+		//c.addReplyError([]byte("INCR option supports a single increment-element pair"))
+		c.addReplyError([]byte("wrong number of arguments")) // TODO: check arity for cmd before the command function
 		return
 	}
 
 	var zobj interface{}
-	var err error
+	var ok bool
 	var score float64
 	var added int64
 	var updated int64
@@ -156,8 +170,7 @@ func zaddGenericCommand(c *client, flags int) {
 	 * either execute fully or nothing at all. */
 	scores := make([]float64, elements)
 	for j := 0; j < elements; j++ {
-		scores[j], err = strconv.ParseFloat(string(c.argv[scoreidx+j*2]), 64)
-		if err != nil {
+		if scores[j], ok = c.getLongDoubleOrReply(c.argv[scoreidx+j*2], nil); !ok {
 			goto cleanup
 		}
 	}
@@ -227,7 +240,7 @@ cleanup:
 
 func zremCommand(c *client) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk, shared.wrongtypeerr)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -254,6 +267,202 @@ func zremCommand(c *client) {
 	c.addReplyLongLong(deleted)
 }
 
+func zremrangebyrankCommand(c *client) {
+	zremrangeGenericCommand(c, ZRANGE_RANK)
+}
+
+func zremrangebyscoreCommand(c *client) {
+	zremrangeGenericCommand(c, ZRANGE_SCORE)
+}
+
+func zremrangebylexCommand(c *client) {
+	zremrangeGenericCommand(c, ZRANGE_LEX)
+}
+
+func zremrangeGenericCommand(c *client, rangetype int) {
+	var (
+		start, end, llen int64
+		deleted          uint
+		zrange           zrangespec
+		lexrange         zlexrangespec
+		ok, keyremoved   bool
+		key              []byte = c.argv[1]
+	)
+
+	/* Step 1: Parse the range. */
+	if rangetype == ZRANGE_RANK {
+		if start, ok = c.getLongLongOrReply(c.argv[2], nil); !ok {
+			return
+		}
+		if end, ok = c.getLongLongOrReply(c.argv[3], nil); !ok {
+			return
+		}
+	} else if rangetype == ZRANGE_SCORE {
+		if zrange, ok = zslParseRange(c.argv[2], c.argv[3]); !ok {
+			c.addReplyError([]byte("min or max is not a float"))
+			return
+		}
+	} else if rangetype == ZRANGE_LEX {
+		if lexrange, ok = zslParseLexRange(c.argv[2], c.argv[3]); !ok {
+			c.addReplyError([]byte("min or max not valid string range item"))
+			return
+		}
+	}
+
+	/* Step 2: Lookup & range sanity checks if needed. */
+	c.db.lockKeyWrite(c.tx, key)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(c.tx, key), shared.czero)
+	if !ok || zobj == nil {
+		return
+	}
+
+	if rangetype == ZRANGE_RANK {
+		/* Sanitize indexes. */
+		llen = int64(zsetLength(zobj))
+		if start < 0 {
+			start = start + llen
+		}
+		if end < 0 {
+			end = end + llen
+		}
+		if start < 0 {
+			start = 0
+		}
+
+		/* Invariant: start >= 0, so this test will be true when end < 0.
+		 * The range is empty when start > end or start >= length. */
+		if start > end || start >= llen {
+			c.addReply(shared.czero)
+			return
+		}
+		if end >= llen {
+			end = llen - 1
+		}
+	}
+
+	/* Step 3: Perform the range deletion operation. */
+	switch z := zobj.(type) {
+	case *zset:
+		if rangetype == ZRANGE_RANK {
+			deleted = zslDeleteRangeByRank(c.tx, z.zsl, uint(start+1), uint(end+1), z.dict)
+		} else if rangetype == ZRANGE_SCORE {
+			deleted = zslDeleteRangeByScore(c.tx, z.zsl, &zrange, z.dict)
+		} else {
+			deleted = zslDeleteRangeByLex(c.tx, z.zsl, &lexrange, z.dict)
+		}
+		if z.zsl.length == 0 {
+			c.db.delete(c.tx, key)
+		}
+		if deleted > 0 {
+			go hashTypeBgResize(c.db, key)
+		}
+	default:
+		panic("Unknown sorted set encoding")
+	}
+
+	/* Step 4: Notifications and reply. */
+	if deleted > 0 {
+		if keyremoved {
+
+		}
+	}
+	c.addReplyLongLong(int64(deleted))
+}
+
+func zrangeCommand(c *client) {
+	zrangeGenericCommand(c, false)
+}
+
+func zrevrangeCommand(c *client) {
+	zrangeGenericCommand(c, true)
+}
+
+func zrangeGenericCommand(c *client, reverse bool) {
+	var (
+		start, end     int64
+		ok, withscores bool
+	)
+	if start, ok = c.getLongLongOrReply(c.argv[2], nil); !ok {
+		return
+	}
+	if end, ok = c.getLongLongOrReply(c.argv[3], nil); !ok {
+		return
+	}
+
+	if c.argc == 5 && strings.EqualFold(string(c.argv[4]), "WITHSCORES") {
+		withscores = true
+	} else if c.argc >= 5 {
+		c.addReply(shared.syntaxerr)
+		return
+	}
+
+	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+		c.addReply(shared.emptymultibulk)
+		return
+	}
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	if !ok || zobj == nil {
+		return
+	}
+
+	/* Sanitize indexes. */
+	llen := int64(zsetLength(zobj))
+	if start < 0 {
+		start = llen + start
+	}
+	if end < 0 {
+		end = llen + end
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > end || start >= llen {
+		c.addReply(shared.emptymultibulk)
+		return
+	}
+	if end >= llen {
+		end = llen - 1
+	}
+	rangelen := end - start + 1
+	replylen := int(rangelen)
+	if withscores {
+		replylen *= 2
+	}
+	c.addReplyMultiBulkLen(replylen)
+
+	switch z := zobj.(type) {
+	case *zset:
+		var ln *zskiplistNode
+		/* Check if starting point is trivial, before doing log(N) lookup. */
+		if reverse {
+			ln = z.zsl.tail
+			if start > 0 {
+				ln = z.zsl.getElementByRank(uint(llen - start))
+			}
+		} else {
+			ln = z.zsl.header.level[0].forward
+			if start > 0 {
+				ln = z.zsl.getElementByRank(uint(start + 1))
+			}
+		}
+
+		for rangelen > 0 {
+			rangelen--
+			c.addReplyBulk(ln.ele)
+			if withscores {
+				c.addReplyDouble(ln.score)
+			}
+			if reverse {
+				ln = ln.backward
+			} else {
+				ln = ln.level[0].forward
+			}
+		}
+	default:
+		panic("Unknown sorted set encoding")
+	}
+}
+
 func zrangebyscoreCommand(c *client) {
 	genericZrangebyscoreCommand(c, false)
 }
@@ -272,8 +481,8 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 		maxidx = 3
 	}
 
-	zrange, err := zslParseRange(c.argv[minidx], c.argv[maxidx])
-	if err != nil {
+	zrange, ok := zslParseRange(c.argv[minidx], c.argv[maxidx])
+	if !ok {
 		c.addReplyError([]byte("min or max is not a float"))
 		return
 	}
@@ -288,20 +497,16 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 		pos := 4
 
 		for remaining > 0 {
-			if remaining >= 1 && bytes.Compare(c.argv[pos], []byte("WITHSCORES")) == 0 {
+			if remaining >= 1 && strings.EqualFold(string(c.argv[pos]), "WITHSCORES") {
 				pos++
 				remaining--
 				withscores = true
-			} else if remaining >= 3 && bytes.Compare(c.argv[pos], []byte("LIMIT")) == 0 {
-				var err error
-				offset, err = strconv.ParseInt(string(c.argv[pos+1]), 19, 64)
-				if err != nil {
-					c.addReplyError([]byte("value is not an integer or out of range"))
+			} else if remaining >= 3 && strings.EqualFold(string(c.argv[pos]), "LIMIT") {
+				var ok bool
+				if offset, ok = c.getLongLongOrReply(c.argv[pos+1], nil); !ok {
 					return
 				}
-				limit, err = strconv.ParseInt(string(c.argv[pos+2]), 19, 64)
-				if err != nil {
-					c.addReplyError([]byte("value is not an integer or out of range"))
+				if limit, ok = c.getLongLongOrReply(c.argv[pos+2], nil); !ok {
 					return
 				}
 				pos += 3
@@ -316,9 +521,10 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 	/* Ok, lookup the key and get the range */
 	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
+		return
 	}
 
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk, shared.wrongtypeerr)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -391,7 +597,259 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 	c.setDeferredMultiBulkLength(rangelen)
 }
 
-/*============== helper functions ====================*/
+func zcountCommand(c *client) {
+	key := c.argv[1]
+
+	/* Parse the range arguments */
+	zrange, ok := zslParseRange(c.argv[2], c.argv[3])
+	if !ok {
+		c.addReplyError([]byte("min or max is not a float"))
+		return
+	}
+
+	/* Lookup the sorted set */
+	if !c.db.lockKeyRead(c.tx, key) { // expired
+		c.addReply(shared.czero)
+		return
+	}
+	var count uint
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
+		switch zs := zobj.(type) {
+		case *zset:
+			/* Find first element in range */
+			zn := zs.zsl.firstInRange(&zrange)
+			/* Use rank of first element, if any, to determine preliminary count */
+			if zn != nil {
+				rank, _ := zs.zsl.getRank(zn.score, zn.ele)
+				count = zs.zsl.length - (rank - 1)
+				/* Find last element in range */
+				zn = zs.zsl.lastInRange(&zrange)
+				/* Use rank of last element, if any, to determine the actual count */
+				if zn != nil {
+					rank, _ := zs.zsl.getRank(zn.score, zn.ele)
+					count -= (zs.zsl.length - rank)
+				}
+			}
+		default:
+			panic("Unknown sorted set encoding")
+		}
+	}
+	c.addReplyLongLong(int64(count))
+}
+
+func zlexcountCommand(c *client) {
+	key := c.argv[1]
+
+	/* Parse the range arguments */
+	zlexrange, ok := zslParseLexRange(c.argv[2], c.argv[3])
+	if !ok {
+		c.addReplyError([]byte("min or max not valid string range item"))
+		return
+	}
+
+	/* Lookup the sorted set */
+	if !c.db.lockKeyRead(c.tx, key) { // expired
+		c.addReply(shared.czero)
+		return
+	}
+	var count uint
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
+		switch zs := zobj.(type) {
+		case *zset:
+			/* Find first element in range */
+			zn := zs.zsl.firstInLexRange(&zlexrange)
+			/* Use rank of first element, if any, to determine preliminary count */
+			if zn != nil {
+				rank, _ := zs.zsl.getRank(zn.score, zn.ele)
+				count = (zs.zsl.length - (rank - 1))
+
+				/* Find last element in range */
+				zn = zs.zsl.lastInLexRange(&zlexrange)
+
+				/* Use rank of last element, if any, to determine the actual count */
+				if zn != nil {
+					rank, _ = zs.zsl.getRank(zn.score, zn.ele)
+					count -= (zs.zsl.length - rank)
+				}
+			}
+		default:
+			panic("Unknown sorted set encoding")
+		}
+	}
+	c.addReplyLongLong(int64(count))
+}
+
+func zrangebylexCommand(c *client) {
+	genericZrangebylexCommand(c, false)
+}
+
+func zrevrangebylexCommand(c *client) {
+	genericZrangebylexCommand(c, true)
+}
+
+func genericZrangebylexCommand(c *client, reverse bool) {
+	/* Parse the range arguments. */
+	var minidx, maxidx int
+	if reverse {
+		maxidx = 2
+		minidx = 3
+	} else {
+		minidx = 2
+		maxidx = 3
+	}
+	zlexrange, ok := zslParseLexRange(c.argv[minidx], c.argv[maxidx])
+	if !ok {
+		c.addReplyError([]byte("min or max not valid string range item"))
+		return
+	}
+
+	/* Parse optional extra arguments. Note that ZCOUNT will exactly have
+	 * 4 arguments, so we'll never enter the following code path. */
+	var limit int64 = -1
+	var offset int64 = 0
+	if c.argc > 4 {
+		remaining := c.argc - 4
+		pos := 4
+
+		for remaining > 0 {
+			if remaining >= 3 && strings.EqualFold(string(c.argv[pos]), "LIMIT") {
+				var ok bool
+				if offset, ok = c.getLongLongOrReply(c.argv[pos+1], nil); !ok {
+					return
+				}
+				if limit, ok = c.getLongLongOrReply(c.argv[pos+2], nil); !ok {
+					return
+				}
+				pos += 3
+				remaining -= 3
+			} else {
+				c.addReply(shared.syntaxerr)
+				return
+			}
+		}
+	}
+
+	/* Ok, lookup the key and get the range */
+	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+		c.addReply(shared.emptymultibulk)
+		return
+	}
+
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	if !ok || zobj == nil {
+		return
+	}
+
+	rangelen := 0
+	switch z := zobj.(type) {
+	case *zset:
+		zsl := z.zsl
+		var ln *zskiplistNode
+		if reverse {
+			ln = zsl.lastInLexRange(&zlexrange)
+		} else {
+			ln = zsl.firstInLexRange(&zlexrange)
+		}
+
+		if ln == nil {
+			c.addReply(shared.emptymultibulk)
+			return
+		}
+
+		/* We don't know in advance how many matching elements there are in the
+		 * list, so we push this object that will represent the multi-bulk
+		 * length in the output buffer, and will "fix" it later */
+		c.addDeferredMultiBulkLength()
+
+		/* If there is an offset, just traverse the number of elements without
+		 * checking the score because that is done in the next loop. */
+		for ln != nil && offset != 0 {
+			if reverse {
+				ln = ln.backward
+			} else {
+				ln = ln.level[0].forward
+			}
+			offset--
+		}
+
+		for ln != nil && limit != 0 {
+			/* Abort when the node is no longer in range. */
+			if reverse {
+				if !zslLexValueGteMin(ln.ele, &zlexrange) {
+					break
+				}
+			} else {
+				if !zslLexValueLteMax(ln.ele, &zlexrange) {
+					break
+				}
+			}
+			rangelen++
+			c.addReplyBulk(ln.ele)
+
+			/* Move to next node */
+			if reverse {
+				ln = ln.backward
+			} else {
+				ln = ln.level[0].forward
+			}
+			limit--
+		}
+	default:
+		panic("Unknown sorted set encoding")
+	}
+	c.setDeferredMultiBulkLength(rangelen)
+}
+
+func zcardCommand(c *client) {
+	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+		c.addReply(shared.czero)
+		return
+	}
+
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero); ok && zobj != nil {
+		c.addReplyLongLong(int64(zsetLength(zobj)))
+	}
+}
+
+func zscoreCommand(c *client) {
+	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+		c.addReply(shared.nullbulk)
+		return
+	}
+
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk); ok && zobj != nil {
+		if score, ok := zsetScore(zobj, c.argv[2]); ok {
+			c.addReplyDouble(score)
+		} else {
+			c.addReply(shared.nullbulk)
+		}
+	}
+}
+
+func zrankCommand(c *client) {
+	zrankGenericCommand(c, false)
+}
+
+func zrevrankCommand(c *client) {
+	zrankGenericCommand(c, true)
+}
+
+func zrankGenericCommand(c *client, reverse bool) {
+	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+		c.addReply(shared.nullbulk)
+		return
+	}
+
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk); ok && zobj != nil {
+		if rank, ok := zsetRank(zobj, c.argv[2], reverse); ok {
+			c.addReplyLongLong(int64(rank))
+		} else {
+			c.addReply(shared.nullbulk)
+		}
+	}
+}
+
+/*============== common zset api ====================*/
 func zsetCreate(tx transaction.TX) *zset {
 	zs := pnew(zset)
 	tx.Log(zs)
@@ -406,6 +864,11 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 	xx := (flags & ZADD_XX) != 0
 	flags = 0
 
+	/* NaN as input is an error regardless of all the other parameters. */
+	if math.IsNaN(score) {
+		return 0, 0, flags
+	}
+
 	switch zs := zobj.(type) {
 	case *zset:
 		_, _, _, de := zs.dict.find(ele)
@@ -419,6 +882,9 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 			/* NX? Return, same element already exists. */
 			if incr {
 				score += curscore
+				if math.IsNaN(score) {
+					return 0, 0, flags
+				}
 			}
 
 			/* Remove and re-insert when score changes. */
@@ -474,6 +940,45 @@ func zsetLength(zobj interface{}) uint {
 	}
 }
 
+func zsetScore(zobj interface{}, ele []byte) (float64, bool) {
+	if zobj == nil || ele == nil {
+		return 0, false
+	}
+	switch zs := zobj.(type) {
+	case *zset:
+		_, _, _, de := zs.dict.find(ele)
+		if de == nil {
+			return 0, false
+		} else {
+			return de.value.(float64), true
+		}
+	default:
+		panic("Unknown sorted set encoding")
+	}
+}
+
+func zsetRank(zobj interface{}, ele []byte, reverse bool) (uint, bool) {
+	switch zs := zobj.(type) {
+	case *zset:
+		_, _, _, de := zs.dict.find(ele)
+		if de == nil {
+			return 0, false
+		} else {
+			score := de.value.(float64)
+			rank, _ := zs.zsl.getRank(score, ele)
+			if reverse {
+				return zs.zsl.length - rank, true
+			} else {
+				return rank - 1, true
+			}
+		}
+	default:
+		panic("Unknown sorted set encoding")
+	}
+}
+
+/*============== common skiplist api ====================*/
+
 func zslCreate(tx transaction.TX) *zskiplist {
 	zsl := pnew(zskiplist)
 	tx.Log(zsl)
@@ -506,31 +1011,27 @@ func zslRandomLevel() int {
 	}
 }
 
-func zslParseRange(min, max []byte) (spec zrangespec, err error) {
+func zslParseRange(min, max []byte) (spec zrangespec, ok bool) {
 	if min[0] == '(' {
-		spec.min, err = strconv.ParseFloat(string(min[1:]), 64)
-		if err != nil {
+		if spec.min, ok = getLongDouble(min[1:]); !ok {
 			return
 		} else {
 			spec.minex = true
 		}
 	} else {
-		spec.min, err = strconv.ParseFloat(string(min), 64)
-		if err != nil {
+		if spec.min, ok = getLongDouble(min); !ok {
 			return
 		}
 	}
 
 	if max[0] == '(' {
-		spec.max, err = strconv.ParseFloat(string(max[1:]), 64)
-		if err != nil {
+		if spec.max, ok = getLongDouble(max[1:]); !ok {
 			return
 		} else {
 			spec.maxex = true
 		}
 	} else {
-		spec.max, err = strconv.ParseFloat(string(max), 64)
-		if err != nil {
+		if spec.max, ok = getLongDouble(max); !ok {
 			return
 		}
 	}
@@ -551,6 +1052,80 @@ func zslValueLteMax(value float64, spec *zrangespec) bool {
 	} else {
 		return value <= spec.max
 	}
+}
+
+func zslDeleteRangeByRank(tx transaction.TX, zsl *zskiplist, start, end uint, dict *dict) uint {
+	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
+	x := zsl.header
+	var traversed, removed uint
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil && (traversed+x.level[i].span) < start {
+			traversed += x.level[i].span
+			x = x.level[i].forward
+		}
+		update[i] = x
+	}
+	traversed++
+	x = x.level[0].forward
+	for x != nil && traversed <= end {
+		zsl.deleteNode(tx, x, update)
+		dict.delete(tx, x.ele)
+		removed++
+		traversed++
+		x = x.level[0].forward
+	}
+	return removed
+}
+
+func zslDeleteRangeByScore(tx transaction.TX, zsl *zskiplist, zrange *zrangespec, dict *dict) uint {
+	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
+	x := zsl.header
+	var removed uint
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil {
+			if (zrange.minex && x.level[i].forward.score <= zrange.min) ||
+				(!zrange.minex && x.level[i].forward.score < zrange.min) {
+				x = x.level[i].forward
+			} else {
+				break
+			}
+		}
+		update[i] = x
+	}
+	x = x.level[0].forward
+	for x != nil {
+		if (zrange.maxex && x.score < zrange.max) ||
+			(!zrange.maxex && x.score <= zrange.max) {
+			zsl.deleteNode(tx, x, update)
+			dict.delete(tx, x.ele)
+			removed++
+			x = x.level[0].forward
+		} else {
+			break
+		}
+	}
+	return removed
+}
+
+func zslDeleteRangeByLex(tx transaction.TX, zsl *zskiplist, lexrange *zlexrangespec, dict *dict) uint {
+	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
+	x := zsl.header
+	var removed uint
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil &&
+			!zslLexValueGteMin(x.level[i].forward.ele, lexrange) {
+			x = x.level[i].forward
+		}
+		update[i] = x
+	}
+	x = x.level[0].forward
+	for x != nil && zslLexValueLteMax(x.ele, lexrange) {
+		zsl.deleteNode(tx, x, update)
+		dict.delete(tx, x.ele)
+		removed++
+		x = x.level[0].forward
+	}
+	return removed
 }
 
 func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zskiplistNode {
@@ -668,6 +1243,21 @@ func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*
 	zsl.length--
 }
 
+func (zsl *zskiplist) getElementByRank(rank uint) *zskiplistNode {
+	x := zsl.header
+	var traversed uint
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil && (traversed+x.level[i].span) <= rank {
+			traversed += x.level[i].span
+			x = x.level[i].forward
+		}
+		if traversed == rank {
+			return x
+		}
+	}
+	return nil
+}
+
 func (zsl *zskiplist) firstInRange(zrange *zrangespec) *zskiplistNode {
 	if !zsl.isInRange(zrange) {
 		return nil
@@ -717,6 +1307,137 @@ func (zsl *zskiplist) isInRange(zrange *zrangespec) bool {
 	}
 	x = zsl.header.level[0].forward
 	if x == nil || !zslValueLteMax(x.score, zrange) {
+		return false
+	}
+	return true
+}
+
+func (zsl *zskiplist) getRank(score float64, ele []byte) (uint, bool) {
+	x := zsl.header
+	var rank uint
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil &&
+			(x.level[i].forward.score < score ||
+				(x.level[i].forward.score == score &&
+					bytes.Compare(x.level[i].forward.ele, ele) <= 0)) {
+			rank += x.level[i].span
+			x = x.level[i].forward
+		}
+
+		if x.ele != nil && bytes.Compare(x.ele, ele) == 0 {
+			return rank, true
+		}
+	}
+	return 0, false
+}
+
+/*============== Lexicographic ranges ====================*/
+
+func zslParseLexRange(min, max []byte) (spec zlexrangespec, ok bool) {
+	if spec.min, spec.minex, ok = zslParseLexRangeItem(min); !ok {
+		return
+	}
+	spec.max, spec.maxex, ok = zslParseLexRangeItem(max)
+	return
+}
+
+func zslParseLexRangeItem(item []byte) ([]byte, bool, bool) {
+	switch item[0] {
+	case '+':
+		if len(item) > 1 {
+			return nil, false, false
+		}
+		return shared.maxstring, false, true
+	case '-':
+		if len(item) > 1 {
+			return nil, false, false
+		}
+		return shared.minstring, false, true
+	case '(':
+		return item[1:], true, true
+	case '[':
+		return item[1:], false, true
+	default:
+		return nil, false, false
+	}
+}
+
+func zslLexValueLteMax(value []byte, spec *zlexrangespec) bool {
+	if spec.maxex {
+		return cmplex(value, spec.max) < 0
+	} else {
+		return cmplex(value, spec.max) <= 0
+	}
+}
+
+func zslLexValueGteMin(value []byte, spec *zlexrangespec) bool {
+	if spec.minex {
+		return cmplex(value, spec.min) > 0
+	} else {
+		return cmplex(value, spec.min) >= 0
+	}
+}
+
+func cmplex(a, b []byte) int {
+	// trick to compare underlying slice value
+	if (len(a) > 0 && &a[0] == &shared.minstring[0]) || (len(b) > 0 && &b[0] == &shared.maxstring[0]) {
+		return -1
+	}
+	if (len(a) > 0 && &a[0] == &shared.maxstring[0]) || (len(b) > 0 && &b[0] == &shared.minstring[0]) {
+		return 1
+	}
+	return bytes.Compare(a, b)
+}
+
+func (zsl *zskiplist) firstInLexRange(zrange *zlexrangespec) *zskiplistNode {
+	if !zsl.isInLexRange(zrange) {
+		return nil
+	}
+	x := zsl.header
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil &&
+			!zslLexValueGteMin(x.level[i].forward.ele, zrange) {
+			x = x.level[i].forward
+		}
+	}
+
+	x = x.level[0].forward
+	if !zslLexValueLteMax(x.ele, zrange) {
+		return nil
+	}
+	return x
+}
+
+func (zsl *zskiplist) lastInLexRange(zrange *zlexrangespec) *zskiplistNode {
+	if !zsl.isInLexRange(zrange) {
+		return nil
+	}
+	x := zsl.header
+	for i := zsl.level - 1; i >= 0; i-- {
+		for x.level[i].forward != nil &&
+			zslLexValueLteMax(x.level[i].forward.ele, zrange) {
+			x = x.level[i].forward
+		}
+	}
+
+	if !zslLexValueGteMin(x.ele, zrange) {
+		return nil
+	}
+	return x
+}
+
+func (zsl *zskiplist) isInLexRange(zrange *zlexrangespec) bool {
+	/* Test for ranges that will always be empty. */
+	if cmplex(zrange.min, zrange.max) > 1 ||
+		(bytes.Compare(zrange.min, zrange.max) == 0 && (zrange.minex || zrange.maxex)) {
+		return false
+	}
+	x := zsl.tail
+	if x == nil || !zslLexValueGteMin(x.ele, zrange) {
+		return false
+	}
+	x = zsl.header.level[0].forward
+	if x == nil || !zslLexValueLteMax(x.ele, zrange) {
 		return false
 	}
 	return true

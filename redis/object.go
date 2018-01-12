@@ -2,6 +2,7 @@ package redis
 
 import (
 	_ "fmt"
+	"math"
 	"pmem/transaction"
 	"strconv"
 	"unsafe"
@@ -61,18 +62,18 @@ func getLongLong(i interface{}) (int64, bool) {
 	case int64:
 		return v, true
 	case []byte:
-		i, err := strconv.ParseInt(string(v), 10, 64)
+		l, err := strconv.ParseInt(string(v), 10, 64)
 		if err != nil {
-			return int64(0), false
+			return l, false
 		} else {
-			return i, true
+			return l, true
 		}
 	case *[]byte:
-		i, err := strconv.ParseInt(string(*v), 10, 64)
+		l, err := strconv.ParseInt(string(*v), 10, 64)
 		if err != nil {
-			return int64(0), false
+			return l, false
 		} else {
-			return i, true
+			return l, true
 		}
 	default:
 		return int64(0), false
@@ -99,25 +100,25 @@ func getLongDouble(i interface{}) (float64, bool) {
 	case float64:
 		return v, true
 	case []byte:
-		i, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return float64(0), false
+		f, err := strconv.ParseFloat(string(v), 64)
+		if err != nil || math.IsNaN(f) {
+			return f, false
 		} else {
-			return i, true
+			return f, true
 		}
 	case *[]byte:
-		i, err := strconv.ParseFloat(string(*v), 64)
-		if err != nil {
-			return float64(0), false
+		f, err := strconv.ParseFloat(string(*v), 64)
+		if err != nil || math.IsNaN(f) {
+			return f, false
 		} else {
-			return i, true
+			return f, true
 		}
 	default:
 		return float64(0), false
 	}
 }
 
-func (c *client) getHashOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) {
+func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
 	if i == nil {
 		if emptymsg != nil {
 			c.addReply(emptymsg)
@@ -128,14 +129,12 @@ func (c *client) getHashOrReply(i interface{}, emptymsg []byte, errmsg []byte) (
 	case *dict:
 		return i, true
 	default:
-		if errmsg != nil {
-			c.addReply(errmsg)
-		}
+		c.addReply(shared.wrongtypeerr)
 		return nil, false
 	}
 }
 
-func (c *client) getZsetOrReply(i interface{}, emptymsg []byte, errmsg []byte) (interface{}, bool) {
+func (c *client) getZsetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
 	if i == nil {
 		if emptymsg != nil {
 			c.addReply(emptymsg)
@@ -146,9 +145,7 @@ func (c *client) getZsetOrReply(i interface{}, emptymsg []byte, errmsg []byte) (
 	case *zset:
 		return i, true
 	default:
-		if errmsg != nil {
-			c.addReply(errmsg)
-		}
+		c.addReply(shared.wrongtypeerr)
 		return nil, false
 	}
 }

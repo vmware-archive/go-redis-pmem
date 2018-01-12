@@ -52,7 +52,9 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, czero, cone, ok, nullbulk, emptybulk, emptymultibulk, syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead []byte
+		crlf, czero, cone, ok, nullbulk, emptybulk, emptymultibulk,
+		syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead,
+		maxstring, minstring []byte
 	}
 )
 
@@ -80,8 +82,18 @@ var (
 		redisCommand{"HVALS", hvalsCommand, CMD_READONLY},
 		redisCommand{"HGETALL", hgetallCommand, CMD_READONLY},
 		redisCommand{"HEXISTS", hexistsCommand, CMD_READONLY},
+		redisCommand{"ZCARD", zcardCommand, CMD_READONLY},
+		redisCommand{"ZSCORE", zscoreCommand, CMD_READONLY},
+		redisCommand{"ZRANK", zrankCommand, CMD_READONLY},
+		redisCommand{"ZREVRANK", zrevrankCommand, CMD_READONLY},
+		redisCommand{"ZCOUNT", zcountCommand, CMD_READONLY},
+		redisCommand{"ZLEXCOUNT", zlexcountCommand, CMD_READONLY},
+		redisCommand{"ZRANGE", zrangeCommand, CMD_READONLY},
+		redisCommand{"ZREVRANGE", zrevrangeCommand, CMD_READONLY},
 		redisCommand{"ZRANGEBYSCORE", zrangebyscoreCommand, CMD_READONLY},
 		redisCommand{"ZREVRANGEBYSCORE", zrevrangebyscoreCommand, CMD_READONLY},
+		redisCommand{"ZRANGEBYLEX", zrangebylexCommand, CMD_READONLY},
+		redisCommand{"ZREVRANGEBYLEX", zrevrangebylexCommand, CMD_READONLY},
 		redisCommand{"EXISTS", existsCommand, CMD_READONLY},
 		redisCommand{"DBSIZE", dbsizeCommand, CMD_READONLY},
 		redisCommand{"SELECT", selectCommand, CMD_READONLY},
@@ -110,7 +122,11 @@ var (
 		redisCommand{"HMSET", hsetCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"HDEL", hdelCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"ZADD", zaddCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZINCRBY", zincrbyCommand, CMD_WRITE},
 		redisCommand{"ZREM", zremCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZREMRANGEBYSCORE", zremrangebyscoreCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZREMRANGEBYRANK", zremrangebyrankCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZREMRANGEBYLEX", zremrangebylexCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"DEL", delCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},
@@ -196,7 +212,9 @@ func createSharedObjects() {
 		wrongtypeerr:   []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
 		bulkhead:       []byte("$"),
 		inthead:        []byte(":"),
-		arrayhead:      []byte("*")}
+		arrayhead:      []byte("*"),
+		maxstring:      []byte("maxstring"),
+		minstring:      []byte("minstring")}
 }
 
 func (s *server) Cron() {

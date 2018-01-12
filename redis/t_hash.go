@@ -60,7 +60,7 @@ func hsetCommand(c *client) {
 
 func hgetCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr); ok {
+		if o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil); ok {
 			c.addHashFieldToReply(o, c.argv[2])
 		}
 	} else { // expired
@@ -72,7 +72,7 @@ func hmgetCommand(c *client) {
 	var o interface{}
 	var ok bool
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil, shared.wrongtypeerr); !ok {
+		if o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil); !ok {
 			return
 		}
 	}
@@ -86,7 +86,7 @@ func hdelCommand(c *client) {
 	var deleted int64
 	removed := false
 	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
 	if ok && o != nil {
 		for i := 2; i < c.argc; i++ {
 			if hashTypeDelete(c, o, c.argv[i]) {
@@ -109,7 +109,7 @@ func hdelCommand(c *client) {
 
 func hlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
 		if ok && o != nil {
 			c.addReplyLongLong(int64(hashTypeLength(o)))
 		}
@@ -120,7 +120,7 @@ func hlenCommand(c *client) {
 
 func hstrlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
 		if ok && o != nil {
 			c.addReplyLongLong(int64(hashTypeGetValueLength(o, c.argv[2])))
 		}
@@ -143,7 +143,7 @@ func hgetallCommand(c *client) {
 
 func genericHgetallCommand(c *client, getK, getV bool) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
 		if ok && o != nil {
 			multiplier := 0
 			if getK {
@@ -167,7 +167,7 @@ func genericHgetallCommand(c *client, getK, getV bool) {
 
 func hexistsCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr)
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
 		if ok && o != nil {
 			if hashTypeExists(o, c.argv[2]) {
 				c.addReply(shared.cone)
@@ -218,7 +218,7 @@ func hincrbyfloatCommand(c *client) {
 /*============== helper functions ====================*/
 
 func hashTypeLookupWriteOrCreate(c *client, key []byte) interface{} {
-	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, key), nil, shared.wrongtypeerr)
+	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, key), nil)
 	if ok {
 		if o == nil {
 			o = NewDict(c.tx, 4, 4) // implicitly convert to interface
