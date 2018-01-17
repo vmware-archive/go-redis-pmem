@@ -64,8 +64,8 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	tx.Begin()
 	tx.Log(d)
 	d.initSize = nextPower(1, initSize)
-	if bucketPerShard > initSize {
-		d.bucketPerShard = initSize
+	if bucketPerShard > d.initSize {
+		d.bucketPerShard = d.initSize
 	} else {
 		d.bucketPerShard = bucketPerShard
 	}

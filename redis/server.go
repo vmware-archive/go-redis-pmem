@@ -127,6 +127,8 @@ var (
 		redisCommand{"ZREMRANGEBYSCORE", zremrangebyscoreCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"ZREMRANGEBYRANK", zremrangebyrankCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"ZREMRANGEBYLEX", zremrangebylexCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZUNIONSTORE", zunionstoreCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"ZINTERSTORE", zinterstoreCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"DEL", delCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"FLUSHDB", flushdbCommand, CMD_WRITE},
 		redisCommand{"EXPIRE", expireCommand, CMD_WRITE},

@@ -44,7 +44,7 @@ type (
 )
 
 const (
-	LBUFFERSIZE = 128 * 1024
+	LBUFFERSIZE = 512 * 1024
 	BUFFERSIZE  = 4 * 1024
 )
 

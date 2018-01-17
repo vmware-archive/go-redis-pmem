@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"pmem/transaction"
+	"sort"
 	"strings"
 	"unsafe"
 )
@@ -42,6 +43,24 @@ type (
 		min, max     []byte
 		minex, maxex bool
 	}
+
+	zsetopsrc struct {
+		subject interface{}
+		weight  float64
+		iter    interface{}
+	}
+	zsetops []zsetopsrc
+
+	zsetIter struct {
+		zs   *zset
+		node *zskiplistNode
+	}
+
+	zsetopval struct {
+		flags int
+		ele   []byte
+		score float64
+	}
 )
 
 const (
@@ -66,6 +85,14 @@ const (
 
 	ZSKIPLIST_MAXLEVEL = 32
 	ZSKIPLIST_P        = 0.25
+
+	REDIS_AGGR_SUM = 1
+	REDIS_AGGR_MIN = 2
+	REDIS_AGGR_MAX = 3
+
+	SET_OP_UNION = 0
+	SET_OP_DIFF  = 1
+	SET_OP_INTER = 2
 )
 
 func (zs *zset) swizzle(tx transaction.TX) {
@@ -849,6 +876,170 @@ func zrankGenericCommand(c *client, reverse bool) {
 	}
 }
 
+func zunionstoreCommand(c *client) {
+	zunionInterGenericCommand(c, c.argv[1], SET_OP_UNION)
+}
+
+func zinterstoreCommand(c *client) {
+	zunionInterGenericCommand(c, c.argv[1], SET_OP_INTER)
+}
+
+func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
+	/* expect setnum input keys to be given */
+	setnum := 0
+	if num, ok := c.getLongLongOrReply(c.argv[2], nil); !ok {
+		return
+	} else {
+		setnum = int(num)
+	}
+
+	if setnum < 1 {
+		c.addReplyError([]byte("at least 1 input key is needed for ZUNIONSTORE/ZINTERSTORE"))
+		return
+	}
+
+	/* test if the expected number of keys would overflow */
+	if setnum > c.argc-3 {
+		c.addReply(shared.syntaxerr)
+		return
+	}
+	/* Tricky here: lock dstkey and input keys in one lockKeysWrite call to avoid deadlock. */
+	// TODO: since this is write command, key locks aquired will automatically become wlock, which is actually not necessary here.
+	keys := make([][]byte, setnum+1)
+	keys[0] = dstkey
+	copy(keys[1:], c.argv[3:])
+	c.db.lockKeysWrite(c.tx, keys, 1)
+
+	src := make([]zsetopsrc, setnum)
+	for i := 0; i < setnum; i++ {
+		if zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[i+3]), nil); !ok {
+			return
+		} else {
+			src[i].subject = zobj
+			/* Default all weights to 1. */
+			src[i].weight = 1.0
+		}
+	}
+	/* parse optional extra arguments */
+	j := setnum + 3
+	remaining := c.argc - j
+	aggregate := REDIS_AGGR_SUM
+	for remaining > 0 {
+		if remaining > setnum && strings.EqualFold(string(c.argv[j]), "weights") {
+			j++
+			remaining--
+			for i := 0; i < setnum; i, j, remaining = i+1, j+1, remaining-1 {
+				var ok bool
+				if src[i].weight, ok = c.getLongDoubleOrReply(c.argv[j], []byte("-ERR weight value is not a float\r\n")); !ok {
+					return
+				}
+			}
+		} else if remaining >= 2 && strings.EqualFold(string(c.argv[j]), "aggregate") {
+			j++
+			remaining--
+			if strings.EqualFold(string(c.argv[j]), "sum") {
+				aggregate = REDIS_AGGR_SUM
+			} else if strings.EqualFold(string(c.argv[j]), "min") {
+				aggregate = REDIS_AGGR_MIN
+			} else if strings.EqualFold(string(c.argv[j]), "max") {
+				aggregate = REDIS_AGGR_MAX
+			} else {
+				c.addReply(shared.syntaxerr)
+				return
+			}
+			j++
+			remaining--
+		} else {
+			c.addReply(shared.syntaxerr)
+			return
+		}
+	}
+
+	/* sort sets from the smallest to largest, this will improve our
+	 * algorithm's performance */
+	sort.Sort(zsetops(src))
+	dstzset := zsetCreate(c.tx)
+	zval := new(zsetopval)
+	if op == SET_OP_INTER {
+		/* Skip everything if the smallest input is empty. */
+		if src[0].zuiLength() > 0 {
+			/* Precondition: as src[0] is non-empty and the inputs are ordered
+			 * by size, all src[i > 0] are non-empty too. */
+			src[0].zuiInitIterator()
+			for src[0].zuiNext(zval) {
+				score := src[0].weight * zval.score
+				if math.IsNaN(score) {
+					score = 0
+				}
+
+				j := 0
+				for j = 1; j < setnum; j++ {
+					/* It is not safe to access the zset we are
+					 * iterating, so explicitly check for equal object. */
+					if src[j].subject == src[0].subject {
+						value := zval.score * src[j].weight
+						score = zuinionInterAggregate(score, value, aggregate)
+					} else if value, ok := src[j].zuiFind(zval); ok {
+						value *= src[j].weight
+						score = zuinionInterAggregate(score, value, aggregate)
+					} else {
+						break
+					}
+				}
+
+				/* Only continue when present in every input. */
+				if j == setnum {
+					tmp := zval.zuiNewSdsFromValue()
+					dstzset.zsl.insert(c.tx, score, tmp)
+					dstzset.dict.set(c.tx, tmp, score)
+				}
+			}
+		}
+	} else if op == SET_OP_UNION {
+		accumulator := NewDict(c.tx, int(src[setnum-1].zuiLength()), 1024)
+		/* Step 1: Create a dictionary of elements -> aggregated-scores
+		 * by iterating one sorted set after the other. */
+		for i := 0; i < setnum; i++ {
+			if src[i].zuiLength() == 0 {
+				continue
+			}
+			src[i].zuiInitIterator()
+			for src[i].zuiNext(zval) {
+				/* Initialize value */
+				score := src[i].weight * zval.score
+				if math.IsNaN(score) {
+					score = 0
+				}
+				/* Search for this element in the accumulating dictionary. */
+				_, _, _, de := accumulator.find(zval.ele)
+				if de == nil {
+					tmp := zval.zuiNewSdsFromValue()
+					accumulator.set(c.tx, tmp, score)
+				} else {
+					c.tx.Log(de)
+					de.value = zuinionInterAggregate(de.value.(float64), score, aggregate)
+				}
+			}
+		}
+		/* Step 2: convert the dictionary into the final sorted set. Since we directly store score in zset dict, we can directly use it. */
+		di := accumulator.getIterator()
+		for de := di.next(); de != nil; de = di.next() {
+			dstzset.zsl.insert(c.tx, de.value.(float64), de.key)
+		}
+		c.tx.Log(&dstzset.dict)
+		dstzset.dict = accumulator
+	} else {
+		panic("Unknown operator")
+	}
+	c.db.delete(c.tx, dstkey)
+	if dstzset.zsl.length > 0 {
+		c.db.setKey(c.tx, shadowCopyToPmem(dstkey), dstzset)
+		c.addReplyLongLong(int64(dstzset.zsl.length))
+	} else {
+		c.addReply(shared.czero)
+	}
+}
+
 /*============== common zset api ====================*/
 func zsetCreate(tx transaction.TX) *zset {
 	zs := pnew(zset)
@@ -1441,4 +1632,107 @@ func (zsl *zskiplist) isInLexRange(zrange *zlexrangespec) bool {
 		return false
 	}
 	return true
+}
+
+/*============== union inter helper functions ====================*/
+func (ops zsetops) Len() int {
+	return len(ops)
+}
+
+func (ops zsetops) Swap(i, j int) {
+	ops[i], ops[j] = ops[j], ops[i]
+}
+
+func (ops zsetops) Less(i, j int) bool {
+	return ops[i].zuiLength() < ops[j].zuiLength()
+}
+
+func (op *zsetopsrc) zuiLength() uint {
+	if op.subject == nil {
+		return 0
+	}
+	switch s := op.subject.(type) {
+	case *zset:
+		return s.zsl.length
+	default:
+		panic("Unsupported type")
+	}
+}
+
+func (op *zsetopsrc) zuiInitIterator() {
+	if op.subject == nil {
+		return
+	}
+	switch s := op.subject.(type) {
+	case *zset:
+		op.iter = &zsetIter{zs: s,
+			node: s.zsl.header.level[0].forward}
+	default:
+		panic("Unsupported type")
+	}
+}
+
+func (op *zsetopsrc) zuiNext(target *zsetopval) bool {
+	if op.subject == nil {
+		return false
+	}
+	switch it := op.iter.(type) {
+	case *zsetIter:
+		if it.node == nil {
+			return false
+		}
+		target.ele = it.node.ele
+		target.score = it.node.score
+		it.node = it.node.level[0].forward
+		return true
+	default:
+		panic("Unsupported type")
+	}
+}
+
+func zuinionInterAggregate(val1, val2 float64, aggregate int) float64 {
+	if aggregate == REDIS_AGGR_SUM {
+		target := val1 + val2
+		if math.IsNaN(target) {
+			return 0
+		} else {
+			return target
+		}
+	} else if aggregate == REDIS_AGGR_MIN {
+		if val1 < val2 {
+			return val1
+		} else {
+			return val2
+		}
+	} else if aggregate == REDIS_AGGR_MAX {
+		if val1 < val2 {
+			return val2
+		} else {
+			return val1
+		}
+	} else {
+		panic("Unknown ZUNION/INTER aggregate type")
+	}
+	return 0
+}
+
+func (op *zsetopsrc) zuiFind(val *zsetopval) (float64, bool) {
+	if op.subject == nil {
+		return 0, false
+	}
+	switch s := op.subject.(type) {
+	case *zset:
+		_, _, _, de := s.dict.find(val.ele)
+		if de == nil {
+			return 0, false
+		} else {
+			return de.value.(float64), true
+		}
+	default:
+		panic("Unsupported type")
+	}
+}
+
+func (val *zsetopval) zuiNewSdsFromValue() []byte {
+	return shadowCopyToPmem(val.ele)
 }
