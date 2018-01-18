@@ -138,7 +138,9 @@ func (t *table) swizzle(tx transaction.TX, d *dict) {
 
 func (e *entry) swizzle(tx transaction.TX) {
 	inPMem(unsafe.Pointer(e))
-	inPMem(unsafe.Pointer(&(e.key[0])))
+	if len(e.key) > 0 {
+		inPMem(unsafe.Pointer(&(e.key[0])))
+	}
 	inPMem(unsafe.Pointer(e.next))
 	//var tmp uintptr
 	//word := uintptr(unsafe.Pointer(&e.value)) + uintptr(unsafe.Sizeof(tmp))
@@ -146,7 +148,9 @@ func (e *entry) swizzle(tx transaction.TX) {
 	//inPMem(unsafe.Pointer(*value))
 	switch v := e.value.(type) {
 	case *[]byte:
-		inPMem(unsafe.Pointer(&(*v)[0]))
+		if len(*v) > 0 {
+			inPMem(unsafe.Pointer(&(*v)[0]))
+		}
 	case *dict:
 		v.swizzle(tx)
 	case *zset:
@@ -154,7 +158,7 @@ func (e *entry) swizzle(tx transaction.TX) {
 	case int64:
 	case float64:
 	default:
-		fmt.Println(e)
+		fmt.Print("%T\n", e.value)
 		panic("unknown type!")
 	}
 }

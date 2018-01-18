@@ -110,7 +110,9 @@ func (zsl *zskiplist) swizzle(tx transaction.TX) {
 	x := zsl.header.level[0].forward
 	for x != nil {
 		inPMem(unsafe.Pointer(x))
-		inPMem(unsafe.Pointer(&(x.ele[0])))
+		if len(x.ele) > 0 {
+			inPMem(unsafe.Pointer(&(x.ele[0])))
+		}
 		inPMem(unsafe.Pointer(x.backward))
 		if x.backward != b {
 			panic("skiplist backward does not match!")

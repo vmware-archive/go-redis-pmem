@@ -3,10 +3,8 @@ package redis
 import (
 	_ "fmt"
 	"math"
-	"pmem/transaction"
 	"strconv"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -151,11 +149,7 @@ func setrangeCommand(c *client) {
 			return
 		}
 		if needed > len(v) {
-			newv := pmake([]byte, needed)
-			copy(newv, v)
-			copy(newv[offset:], update)
-			transaction.Persist(unsafe.Pointer(&newv[0]), len(newv)) // shadow update
-			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), newv)
+			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowConcatToPmemI(v, update, offset, needed))
 			c.addReplyLongLong(int64(needed))
 		} else {
 			c.tx.Log(v[offset:needed]) // inline update needs to be logged
@@ -274,11 +268,8 @@ func appendCommand(c *client) {
 		if !checkStringLength(c, totlen) {
 			return
 		}
-		newv := pmake([]byte, totlen)
-		copy(newv, v)
-		copy(newv[len(v):], c.argv[2])
-		transaction.Persist(unsafe.Pointer(&newv[0]), totlen) // shadow update
-		c.db.setKey(c.tx, c.argv[1], newv)                    // no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
+		// no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
+		c.db.setKey(c.tx, c.argv[1], shadowConcatToPmemI(v, c.argv[2], len(v), totlen))
 	}
 	c.addReplyLongLong(int64(totlen))
 }

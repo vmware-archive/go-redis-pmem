@@ -169,3 +169,13 @@ func shadowCopyToPmemI(v []byte) interface{} {
 	}
 	return pv // make sure interface is pointing to a in pmem slice header
 }
+
+func shadowConcatToPmemI(v1, v2 []byte, offset, total int) interface{} {
+	// TODO: direct concat if v1 has enough free space.
+	pv := pnew([]byte) // a walk around to slove the pass by value problem of slice
+	*pv = pmake([]byte, total)
+	copy(*pv, v1)
+	copy((*pv)[offset:], v2)
+	transaction.Persist(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
+	return pv                                                // make sure interface is pointing to a in pmem slice header
+}
