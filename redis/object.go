@@ -134,6 +134,22 @@ func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bo
 	}
 }
 
+func (c *client) getSetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
+	if i == nil {
+		if emptymsg != nil {
+			c.addReply(emptymsg)
+		}
+		return nil, true
+	}
+	switch i.(type) { //TODO: support intset
+	case *dict:
+		return i, true
+	default:
+		c.addReply(shared.wrongtypeerr)
+		return nil, false
+	}
+}
+
 func (c *client) getZsetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
 	if i == nil {
 		if emptymsg != nil {
@@ -161,7 +177,7 @@ func shadowCopyToPmem(v []byte) []byte {
 }
 
 func shadowCopyToPmemI(v []byte) interface{} {
-	pv := pnew([]byte) // a walk around to slove the pass by value problem of slice
+	pv := pnew([]byte) // a work around to solve the pass by value problem of slice
 	*pv = pmake([]byte, len(v))
 	if len(v) > 0 {
 		copy(*pv, v)
@@ -172,7 +188,8 @@ func shadowCopyToPmemI(v []byte) interface{} {
 
 func shadowConcatToPmemI(v1, v2 []byte, offset, total int) interface{} {
 	// TODO: direct concat if v1 has enough free space.
-	pv := pnew([]byte) // a walk around to slove the pass by value problem of slice
+	// TODO: perform two copies concurrently, may need to check size and overlap first.
+	pv := pnew([]byte) // a work around to solve the pass by value problem of slice
 	*pv = pmake([]byte, total)
 	copy(*pv, v1)
 	copy((*pv)[offset:], v2)

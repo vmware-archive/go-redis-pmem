@@ -157,8 +157,9 @@ func (e *entry) swizzle(tx transaction.TX) {
 		v.swizzle(tx)
 	case int64:
 	case float64:
+	case nil:
 	default:
-		fmt.Print("%T\n", e.value)
+		fmt.Printf("%T\n", e.value)
 		panic("unknown type!")
 	}
 }
