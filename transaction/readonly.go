@@ -8,13 +8,15 @@ import (
 
 type (
 	readonlyTx struct {
-		level  int
-		rlocks []*sync.RWMutex
+		level   int
+		fakelog bool
+		rlocks  []*sync.RWMutex
 	}
 )
 
 func NewReadonly() TX {
 	t := new(readonlyTx)
+	t.fakelog = false
 	t.rlocks = make([]*sync.RWMutex, 0, 3)
 	return t
 }
@@ -24,8 +26,17 @@ func releaseReadonly(t *readonlyTx) {
 }
 
 func (t *readonlyTx) Log(data interface{}) error {
+	if t.fakelog {
+		// may call Log function from operations to tmporary objects in pmem, just ignore them.
+		return nil
+	}
 	log.Fatal("tx.readonly: cannot log in readonly transaction!")
 	return errors.New("tx.readonly: cannot log in readonly transaction!")
+}
+
+func (t *readonlyTx) FakeLog(interface{}) {
+	// allow logging api
+	t.fakelog = true
 }
 
 func (t *readonlyTx) Begin() error {

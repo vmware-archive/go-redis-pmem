@@ -90,9 +90,10 @@ const (
 	REDIS_AGGR_MIN = 2
 	REDIS_AGGR_MAX = 3
 
-	SET_OP_UNION = 0
-	SET_OP_DIFF  = 1
-	SET_OP_INTER = 2
+	SET_OP_UNION        = 0
+	SET_OP_DIFF         = 1
+	SET_OP_INTER        = 2
+	SET_OP_UNION_NOLOCK = 3
 )
 
 func (zs *zset) swizzle(tx transaction.TX) {
@@ -914,7 +915,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 
 	src := make([]zsetopsrc, setnum)
 	for i := 0; i < setnum; i++ {
-		if zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[i+3]), nil); !ok {
+		if zobj, ok := c.getSetZsetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[i+3]), nil); !ok {
 			return
 		} else {
 			src[i].subject = zobj
@@ -1650,34 +1651,33 @@ func (ops zsetops) Less(i, j int) bool {
 }
 
 func (op *zsetopsrc) zuiLength() uint {
-	if op.subject == nil {
-		return 0
-	}
 	switch s := op.subject.(type) {
 	case *zset:
 		return s.zsl.length
+	case *dict:
+		return uint(s.size())
+	case nil:
+		return 0
 	default:
 		panic("Unsupported type")
 	}
 }
 
 func (op *zsetopsrc) zuiInitIterator() {
-	if op.subject == nil {
-		return
-	}
 	switch s := op.subject.(type) {
 	case *zset:
 		op.iter = &zsetIter{zs: s,
 			node: s.zsl.header.level[0].forward}
+	case *dict:
+		op.iter = s.getIterator()
+	case nil:
+		op.iter = nil
 	default:
 		panic("Unsupported type")
 	}
 }
 
 func (op *zsetopsrc) zuiNext(target *zsetopval) bool {
-	if op.subject == nil {
-		return false
-	}
 	switch it := op.iter.(type) {
 	case *zsetIter:
 		if it.node == nil {
@@ -1687,6 +1687,17 @@ func (op *zsetopsrc) zuiNext(target *zsetopval) bool {
 		target.score = it.node.score
 		it.node = it.node.level[0].forward
 		return true
+	case *dictIterator:
+		de := it.next()
+		if de == nil {
+			return false
+		} else {
+			target.ele = de.key
+			target.score = 1
+			return true
+		}
+	case nil:
+		return false
 	default:
 		panic("Unsupported type")
 	}
@@ -1719,9 +1730,6 @@ func zuinionInterAggregate(val1, val2 float64, aggregate int) float64 {
 }
 
 func (op *zsetopsrc) zuiFind(val *zsetopval) (float64, bool) {
-	if op.subject == nil {
-		return 0, false
-	}
 	switch s := op.subject.(type) {
 	case *zset:
 		_, _, _, de := s.dict.find(val.ele)
@@ -1730,6 +1738,15 @@ func (op *zsetopsrc) zuiFind(val *zsetopval) (float64, bool) {
 		} else {
 			return de.value.(float64), true
 		}
+	case *dict:
+		_, _, _, de := s.find(val.ele)
+		if de == nil {
+			return 0, false
+		} else {
+			return 1, true
+		}
+	case nil:
+		return 0, false
 	default:
 		panic("Unsupported type")
 	}

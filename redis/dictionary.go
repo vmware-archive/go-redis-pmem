@@ -64,9 +64,10 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	tx.Begin()
 	tx.Log(d)
 	d.initSize = nextPower(1, initSize)
-	if bucketPerShard > d.initSize {
+	// TODO: add -1 value to indicate ALWAYS set bucketPerShard equal to dict size.
+	if bucketPerShard >= initSize || bucketPerShard <= 0 {
 		d.bucketPerShard = d.initSize
-	} else {
+	} else if bucketPerShard > 0 {
 		d.bucketPerShard = bucketPerShard
 	}
 	d.lock = new(sync.RWMutex)
@@ -454,14 +455,14 @@ func (d *dict) empty(tx transaction.TX) {
 	d.rehashIdx = -1
 }
 
-func (d *dict) randomKey() []byte {
+func (d *dict) randomKey() *entry {
 	if d.size() == 0 {
 		return nil
 	}
 
 	/* search from possible buckets */
 	var e *entry = nil
-	if d.rehashIdx >= 0 {
+	if d.rehashIdx >= 0 { // rehashing
 		for e == nil {
 			h := d.rehashIdx + (rand.Int() % (d.tab[0].mask + d.tab[1].mask + 2 - d.rehashIdx))
 			if h > d.tab[0].mask {
@@ -470,10 +471,15 @@ func (d *dict) randomKey() []byte {
 				e = d.tab[0].bucket[h]
 			}
 		}
-	} else {
+	} else if d.rehashIdx == -1 { // not rehashing
 		for e == nil {
 			h := rand.Int() & d.tab[0].mask
 			e = d.tab[0].bucket[h]
+		}
+	} else { // rehash finished but not swapping table
+		for e == nil {
+			h := rand.Int() & d.tab[1].mask
+			e = d.tab[1].bucket[h]
 		}
 	}
 
@@ -487,7 +493,7 @@ func (d *dict) randomKey() []byte {
 	for i := 0; i < rand.Int()%ll; i++ {
 		e = e.next
 	}
-	return e.key
+	return e
 }
 
 func (d *dict) getIterator() *dictIterator {

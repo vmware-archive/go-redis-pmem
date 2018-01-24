@@ -179,6 +179,10 @@ func (t *undoTx) Log(data interface{}) error {
 	return nil
 }
 
+func (t *undoTx) FakeLog(interface{}) {
+	// No logging
+}
+
 func (t *undoTx) Begin() error {
 	t.level += 1
 	return nil

@@ -53,7 +53,7 @@ type (
 
 	sharedObjects struct {
 		crlf, czero, cone, ok, nullbulk, emptybulk, emptymultibulk,
-		syntaxerr, wrongtypeerr, bulkhead, inthead, arrayhead,
+		syntaxerr, wrongtypeerr, outofrangeerr, bulkhead, inthead, arrayhead,
 		maxstring, minstring []byte
 	}
 )
@@ -108,7 +108,10 @@ var (
 		redisCommand{"SETNX", setnxCommand, CMD_WRITE},
 		redisCommand{"SETEX", setexCommand, CMD_WRITE},
 		redisCommand{"SINTER", sinterCommand, CMD_READONLY},
+		redisCommand{"SDIFF", sdiffCommand, CMD_READONLY},
+		redisCommand{"SUNION", sunionCommand, CMD_READONLY},
 		redisCommand{"SMEMBERS", sinterCommand, CMD_READONLY},
+		redisCommand{"SRANDMEMBER", srandmemberCommand, CMD_READONLY},
 		redisCommand{"PSETEX", psetexCommand, CMD_WRITE},
 		redisCommand{"SETRANGE", setrangeCommand, CMD_WRITE},
 		redisCommand{"GETSET", getsetCommand, CMD_WRITE},
@@ -128,7 +131,10 @@ var (
 		redisCommand{"SADD", saddCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"SREM", sremCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"SMOVE", smoveCommand, CMD_WRITE},
+		redisCommand{"SPOP", spopCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"SINTERSTORE", sinterstoreCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"SDIFFSTORE", sdiffstoreCommand, CMD_WRITE | CMD_LARGE},
+		redisCommand{"SUNIONSTORE", sunionstoreCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"ZADD", zaddCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"ZINCRBY", zincrbyCommand, CMD_WRITE},
 		redisCommand{"ZREM", zremCommand, CMD_WRITE | CMD_LARGE},
@@ -220,6 +226,7 @@ func createSharedObjects() {
 		emptymultibulk: []byte("*0\r\n"),
 		syntaxerr:      []byte("-ERR syntax error\r\n"),
 		wrongtypeerr:   []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+		outofrangeerr:  []byte("-ERR index out of range\r\n"),
 		bulkhead:       []byte("$"),
 		inthead:        []byte(":"),
 		arrayhead:      []byte("*"),
@@ -385,7 +392,7 @@ func (c *client) processCommand() {
 	} else {
 		if c.cmd.flag&CMD_READONLY > 0 {
 			c.tx = transaction.NewReadonly()
-		} else if c.cmd.flag&CMD_LARGE > 0 {
+		} else if c.cmd.flag&CMD_LARGE > 0 { // TODO: check large command by argument number?
 			c.tx = transaction.NewLargeUndo()
 		} else {
 			c.tx = transaction.NewUndo()

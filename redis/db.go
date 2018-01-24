@@ -111,8 +111,8 @@ func selectCommand(c *client) {
 
 func randomkeyCommand(c *client) {
 	c.db.dict.lockAllKeys(c.tx)
-	if k := c.db.randomKey(); k != nil {
-		c.addReplyBulk(k)
+	if de := c.db.randomKey(); de != nil {
+		c.addReplyBulk(de.key)
 	} else {
 		c.addReply(shared.nullbulk)
 	}
@@ -189,7 +189,7 @@ func (db *redisDb) lookupKey(key []byte) interface{} {
 	}
 }
 
-func (db *redisDb) randomKey() []byte {
+func (db *redisDb) randomKey() *entry {
 	for {
 		k := db.dict.randomKey()
 		return k

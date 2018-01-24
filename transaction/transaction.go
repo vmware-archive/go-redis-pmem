@@ -16,6 +16,7 @@ type (
 	TX interface {
 		Begin() error
 		Log(interface{}) error
+		FakeLog(interface{})
 		Commit() error
 		Abort() error
 		RLock(*sync.RWMutex)

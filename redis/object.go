@@ -25,9 +25,6 @@ func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte)
 }
 
 func getString(i interface{}) ([]byte, bool) {
-	if i == nil {
-		return nil, true
-	}
 	switch v := i.(type) {
 	case []byte:
 		return v, true
@@ -37,6 +34,8 @@ func getString(i interface{}) ([]byte, bool) {
 		return []byte(strconv.FormatFloat(v, 'f', 17, 64)), true
 	case int64:
 		return []byte(strconv.FormatInt(v, 10)), true
+	case nil:
+		return nil, true
 	default:
 		return nil, false
 	}
@@ -55,9 +54,6 @@ func (c *client) getLongLongOrReply(i interface{}, errmsg []byte) (int64, bool) 
 }
 
 func getLongLong(i interface{}) (int64, bool) {
-	if i == nil {
-		return int64(0), true
-	}
 	switch v := i.(type) {
 	case int64:
 		return v, true
@@ -75,6 +71,8 @@ func getLongLong(i interface{}) (int64, bool) {
 		} else {
 			return l, true
 		}
+	case nil:
+		return int64(0), true
 	default:
 		return int64(0), false
 	}
@@ -119,15 +117,15 @@ func getLongDouble(i interface{}) (float64, bool) {
 }
 
 func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
-	if i == nil {
+
+	switch i.(type) { //TODO: support ziplist
+	case *dict:
+		return i, true
+	case nil:
 		if emptymsg != nil {
 			c.addReply(emptymsg)
 		}
 		return nil, true
-	}
-	switch i.(type) { //TODO: support ziplist
-	case *dict:
-		return i, true
 	default:
 		c.addReply(shared.wrongtypeerr)
 		return nil, false
@@ -135,15 +133,14 @@ func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bo
 }
 
 func (c *client) getSetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
-	if i == nil {
+	switch i.(type) { //TODO: support intset
+	case *dict:
+		return i, true
+	case nil:
 		if emptymsg != nil {
 			c.addReply(emptymsg)
 		}
 		return nil, true
-	}
-	switch i.(type) { //TODO: support intset
-	case *dict:
-		return i, true
 	default:
 		c.addReply(shared.wrongtypeerr)
 		return nil, false
@@ -151,15 +148,31 @@ func (c *client) getSetOrReply(i interface{}, emptymsg []byte) (interface{}, boo
 }
 
 func (c *client) getZsetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
-	if i == nil {
+	switch i.(type) { //TODO: support ziplist
+	case *zset:
+		return i, true
+	case nil:
 		if emptymsg != nil {
 			c.addReply(emptymsg)
 		}
 		return nil, true
+	default:
+		c.addReply(shared.wrongtypeerr)
+		return nil, false
 	}
-	switch i.(type) { //TODO: support ziplist
+}
+
+func (c *client) getSetZsetOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
+	switch i.(type) { //TODO: support ziplist and intset
 	case *zset:
 		return i, true
+	case *dict:
+		return i, true
+	case nil:
+		if emptymsg != nil {
+			c.addReply(emptymsg)
+		}
+		return nil, true
 	default:
 		c.addReply(shared.wrongtypeerr)
 		return nil, false

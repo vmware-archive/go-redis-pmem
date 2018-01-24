@@ -6,6 +6,7 @@ package redis
 
 import (
 	"math"
+	"math/rand"
 	"pmem/transaction"
 	"strconv"
 )
@@ -275,6 +276,14 @@ func hashTypeDelete(c *client, o interface{}, field []byte) bool {
 }
 
 func hashTypeBgResize(db *redisDb, key []byte) {
+	if key == nil {
+		return
+	}
+	// only triger resize with some probability.
+	p := rand.Intn(100)
+	if p > 5 {
+		return
+	}
 	tx := transaction.NewUndo()
 	rehash := true
 	for rehash {
@@ -282,9 +291,6 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 		tx.Begin()
 		db.lockKeyWrite(tx, key)
 		o := db.lookupKeyWrite(tx, key)
-		if o == nil {
-			break
-		}
 		var d *dict
 		switch v := o.(type) {
 		case *dict:
