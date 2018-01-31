@@ -1,0 +1,362 @@
+package redis
+
+import (
+	"encoding/binary"
+	_ "fmt"
+	"math"
+	"pmem/transaction"
+	"strconv"
+	"unsafe"
+)
+
+type (
+	ziplist struct {
+		zltail  uint32
+		entries uint32
+		data    []byte
+	}
+
+	zlentry struct {
+		prevlensize, prevlen, lensize, dlen, headersize uint32
+		encoding                                        byte
+		entry                                           []byte
+	}
+)
+
+const (
+	ZIP_BIG_PREVLEN  uint8 = 254
+	ZIP_STR_MASK     uint8 = 0xc0
+	ZIP_STR_06B      uint8 = 0 << 6
+	ZIP_STR_14B      uint8 = 1 << 6
+	ZIP_STR_32B      uint8 = 2 << 6
+	ZIP_INT_16B      uint8 = 0xc0 | 0<<4
+	ZIP_INT_32B      uint8 = 0xc0 | 1<<4
+	ZIP_INT_64B      uint8 = 0xc0 | 2<<4
+	ZIP_INT_24B      uint8 = 0xc0 | 3<<4
+	ZIP_INT_8B       uint8 = 0xfe
+	ZIP_INT_IMM_MIN  uint8 = 0xf1
+	ZIP_INT_IMM_MAX  uint8 = 0xfd
+	ZIP_INT_IMM_MASK uint8 = 0x0f
+)
+
+func ziplistNew(tx transaction.TX) *ziplist {
+	return pnew(ziplist)
+}
+
+/* get val at given offset. */
+func (zl *ziplist) Get(pos int) interface{} {
+	if pos >= len(zl.data) || pos < 0 {
+		return nil
+	}
+	var entry zlentry
+	entry.set(zl.data[pos:])
+	// fmt.Println("Get entry at pos", pos, entry)
+	if (entry.encoding & ZIP_STR_MASK) < ZIP_STR_MASK { // string encoding entry
+		return zl.data[uint32(pos)+entry.headersize : uint32(pos)+entry.headersize+entry.dlen]
+	} else { // int encoding entry
+		return zipLoadInteger(zl.data[uint32(pos)+entry.headersize:], entry.encoding)
+	}
+}
+
+/* return offset to use for Get and Next. Traverse back to front if idx is negative. Return len(zl.data) if out of range. */
+func (zl *ziplist) Index(idx int) int {
+	pos := 0
+	if idx < 0 { // travel backward
+		idx = (-idx) - 1
+		if len(zl.data) > 0 {
+			pos = int(zl.zltail)
+			_, prevlen := zipEntryPrevlen(zl.data[pos:])
+			for prevlen > 0 && idx > 0 {
+				idx--
+				pos -= int(prevlen)
+				_, prevlen = zipEntryPrevlen(zl.data[pos:])
+			}
+		}
+	} else { // travel forward
+		for pos < len(zl.data) && idx > 0 {
+			idx--
+			pos += int(zipEntrylen(zl.data[pos:]))
+		}
+	}
+	if idx > 0 || pos == len(zl.data) {
+		return -1
+	} else {
+		return pos
+	}
+}
+
+/* push val to the tail of list. */
+func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
+	if head {
+		zl.insert(tx, 0, val)
+	} else {
+		zl.insert(tx, len(zl.data), val)
+	}
+}
+
+func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
+	// construct new entry in tmp volatile slice
+	prevlensize, prevlen := zl.prevlen(pos)
+	// fmt.Println("insert to", pos, "prev len", prevlensize, prevlen)
+	// give enough room for two prevlen and encoding
+	entry := make([]byte, prevlensize+10)
+	// store prevlen
+	if prevlensize == 1 {
+		entry[0] = uint8(prevlen)
+	} else {
+		entry[0] = ZIP_BIG_PREVLEN
+		binary.LittleEndian.PutUint32(entry[1:], prevlen)
+	}
+	// try to encod val
+	s, ll, encoding := zipTryEncoding(val)
+	// store encoding and len
+	encodesize := zipStoreEntryEncoding(entry[prevlensize:], encoding, len(s))
+	// store the val
+	if s != nil { // string encoding, direct copy
+		entry = entry[:prevlensize+encodesize] // trim unused space
+		entry = append(entry, s...)
+	} else { // int encoding
+		llsize := zipSaveInteger(entry[prevlensize+encodesize:], ll, encoding)
+		entry = entry[:prevlensize+encodesize+llsize] // trim unused space
+	}
+	// fmt.Println("newentry", len(entry), entry)
+
+	// insert entry into zl
+	tx.Log(zl)
+	// TODO: implement persistent append/realloc/memmove. Currently always copy to newly allocated slice
+	newdata := pmake([]byte, len(zl.data)+len(entry))
+	tailShift := 0
+	copy(newdata, zl.data[0:pos])
+	copy(newdata[pos:], entry)
+	copy(newdata[pos+len(entry):], zl.data[pos:])
+	if pos == len(zl.data) { // insert to the tail
+		zl.zltail = uint32(len(zl.data))
+		// fmt.Println("insert to tail, new tail", zl.zltail)
+	} else { // insert into middle, need to update prevlen of following entries
+		// cascade update following entries
+		newdata, tailShift = cascadeUpdate(newdata, pos)
+		zl.zltail += uint32(len(entry) + tailShift)
+		// fmt.Println("insert to middle, new tail", zl.zltail)
+	}
+	transaction.Persist(unsafe.Pointer(&newdata[0]), len(newdata))
+	zl.data = newdata
+	zl.entries++
+	// fmt.Println("insert finish, new entries, len", zl.entries, len(zl.data), zl.data)
+}
+
+func cascadeUpdate(data []byte, pos int) ([]byte, int) {
+	tailShift := 0
+	for pos < len(data) {
+		// get curr entry size
+		currsize := zipEntrylen(data[pos:])
+		pos += int(currsize)
+		if pos == len(data) { // reach end of list
+			break
+		}
+		// get prevlen field of next entry
+		prevlensize, prevlen := zipEntryPrevlen(data[pos:])
+		if prevlen == currsize { // no size change
+			break
+		} else if currsize < uint32(ZIP_BIG_PREVLEN) || prevlensize == 5 { // enough space to hold currsize
+			if prevlensize == 1 {
+				data[pos] = uint8(currsize)
+			} else {
+				binary.LittleEndian.PutUint32(data[pos+1:], currsize)
+			}
+		} else { // need more room to hold currsize
+			// TODO: implement persistent append/realloc/memmove
+			if pos+int(zipEntrylen(data[pos:])) < len(data) { // next entry is not tail
+				tailShift += 4
+			}
+			newdata := pmake([]byte, len(data)+4)
+			copy(newdata, data[:pos])
+			copy(newdata[pos+5:], data[pos+1:])
+			newdata[pos] = ZIP_BIG_PREVLEN
+			binary.LittleEndian.PutUint32(newdata[pos+1:], currsize)
+			data = newdata
+		}
+	}
+	return data, tailShift
+}
+
+/* get information of an entry and put into zlentry struct. */
+func (ze *zlentry) set(entry []byte) {
+	ze.prevlensize, ze.prevlen = zipEntryPrevlen(entry)
+	ze.lensize, ze.dlen = zipEntryDatalen(entry[ze.prevlensize:])
+	ze.headersize = ze.prevlensize + ze.lensize
+	ze.encoding = entry[ze.prevlensize]
+	ze.entry = entry
+}
+
+/* get size to hold prev len and prev entry len of entry at given position. */
+func (zl *ziplist) prevlen(pos int) (uint32, uint32) {
+	if len(zl.data) == 0 || pos == 0 { // insert to head or an empty list
+		return 1, 0
+	} else if pos < len(zl.data) { // get prev entry len from encoding of curr entry
+		return zipEntryPrevlen(zl.data[pos:])
+	} else { // insert to tail, calculate prev entry len of old tail entry
+		prevlen := zipEntrylen(zl.data[zl.zltail:])
+		if prevlen < uint32(ZIP_BIG_PREVLEN) {
+			return 1, prevlen
+		} else {
+			return 5, prevlen
+		}
+	}
+}
+
+func zipEntryPrevlen(entry []byte) (uint32, uint32) {
+	if entry[0] < ZIP_BIG_PREVLEN {
+		return 1, uint32(entry[0])
+	} else {
+		return 5, binary.LittleEndian.Uint32(entry[1:])
+	}
+}
+
+/* len of an entry, including [prevlen, encoding, len, data] */
+func zipEntrylen(entry []byte) uint32 {
+	var prevlensize uint32
+	// Do not need to decode prelen in this case.
+	if entry[0] < ZIP_BIG_PREVLEN {
+		prevlensize = 1
+	} else {
+		prevlensize = 5
+	}
+	lensize, size := zipEntryDatalen(entry[prevlensize:])
+	return prevlensize + lensize + size
+}
+
+/* len of entry data, return size of (encoding+len) and size of (data) */
+func zipEntryDatalen(entry []byte) (uint32, uint32) {
+	encoding := entry[0]
+	// fmt.Println("Get data len, encoding:", encoding)
+	if encoding < ZIP_STR_MASK {
+		encoding &= ZIP_STR_MASK
+		if encoding == ZIP_STR_06B {
+			// fmt.Println("str 6B", uint32(entry[0] & 0x3f))
+			return 1, uint32(entry[0] & 0x3f)
+		} else if encoding == ZIP_STR_14B {
+			tmp := make([]byte, 2)
+			tmp[0] = entry[0] & 0x3f
+			tmp[1] = entry[1]
+			// fmt.Println("str 14B", uint32(binary.BigEndian.Uint16(tmp)))
+			return 2, uint32(binary.BigEndian.Uint16(tmp))
+		} else if encoding == ZIP_STR_32B {
+			// fmt.Println("str 32B", binary.BigEndian.Uint32(entry[1:]))
+			return 5, binary.BigEndian.Uint32(entry[1:])
+		} else {
+			panic("Invalid string encoding")
+		}
+	} else {
+		switch encoding {
+		case ZIP_INT_8B:
+			return 1, 1
+		case ZIP_INT_16B:
+			return 1, 2
+		case ZIP_INT_24B:
+			return 1, 3
+		case ZIP_INT_32B:
+			return 1, 4
+		case ZIP_INT_64B:
+			return 1, 8
+		}
+		if encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX {
+			return 1, 0
+		}
+		panic("Invalid integer encoding")
+	}
+	return 0, 0
+}
+
+/* determine encoding of val by its type and length */
+func zipTryEncoding(val interface{}) ([]byte, int64, byte) {
+	var value int64
+	switch v := val.(type) {
+	case []byte:
+		if len(v) >= 32 || len(v) == 0 {
+			return v, 0, 0
+		} else {
+			if ll, err := strconv.ParseInt(string(v), 10, 64); err == nil {
+				value = ll
+			} else {
+				return v, 0, 0
+			}
+		}
+	case int64:
+		value = v
+	default:
+		panic("Invalid ziplist value")
+	}
+
+	if value >= 0 && value <= 12 {
+		return nil, value, ZIP_INT_IMM_MIN + uint8(value)
+	} else if value >= math.MinInt8 && value <= math.MaxInt8 {
+		return nil, value, ZIP_INT_8B
+	} else if value >= math.MinInt16 && value <= math.MaxInt16 {
+		return nil, value, ZIP_INT_16B
+	} else if value >= math.MinInt32 && value <= math.MaxInt32 {
+		return nil, value, ZIP_INT_32B
+	} else {
+		return nil, value, ZIP_INT_64B
+	}
+}
+
+/* store [encoding, len] into entry */
+func zipStoreEntryEncoding(v []byte, encoding byte, size int) uint32 {
+	if (encoding & ZIP_STR_MASK) < ZIP_STR_MASK { // str encoding
+		if size <= 0x3f {
+			v[0] = ZIP_STR_06B | uint8(size)
+			return 1
+		} else if size <= 0x3fff {
+			binary.BigEndian.PutUint16(v, uint16(size))
+			v[0] = (v[0] & 0x3f) | ZIP_STR_14B
+			return 2
+		} else {
+			v[0] = ZIP_STR_32B
+			binary.BigEndian.PutUint32(v[1:], uint32(size))
+			return 5
+		}
+	} else { // integer encoding
+		v[0] = encoding
+	}
+	return 1
+}
+
+/* store interger data into entry. */
+func zipSaveInteger(v []byte, ll int64, encoding byte) uint32 {
+	if encoding == ZIP_INT_8B {
+		v[0] = byte(ll)
+		return 1
+	} else if encoding == ZIP_INT_16B {
+		binary.LittleEndian.PutUint16(v, uint16(ll))
+		return 2
+	} else if encoding == ZIP_INT_32B {
+		binary.LittleEndian.PutUint32(v, uint32(ll))
+		return 4
+	} else if encoding == ZIP_INT_64B {
+		binary.LittleEndian.PutUint64(v, uint64(ll))
+		return 8
+	} else if encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX {
+		return 0
+	} else {
+		panic("Save unknown interger encoding.")
+	}
+}
+
+/* load interger data from entry. */
+func zipLoadInteger(v []byte, encoding byte) int64 {
+	var ret int64
+	if encoding == ZIP_INT_8B {
+		ret = int64(v[0])
+	} else if encoding == ZIP_INT_16B {
+		ret = int64(binary.LittleEndian.Uint16(v))
+	} else if encoding == ZIP_INT_32B {
+		ret = int64(binary.LittleEndian.Uint32(v))
+	} else if encoding == ZIP_INT_64B {
+		ret = int64(binary.LittleEndian.Uint64(v))
+	} else if encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX {
+		ret = int64(encoding&ZIP_INT_IMM_MASK) - 1
+	} else {
+		panic("Save unknown interger encoding.")
+	}
+	return ret
+}

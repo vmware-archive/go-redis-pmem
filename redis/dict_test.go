@@ -1,10 +1,12 @@
 package redis
 
 import (
+	"bytes"
 	"fmt"
 	_ "net/http/pprof"
 	"pmem/heap"
 	"pmem/transaction"
+	"reflect"
 	"runtime/debug"
 	"strconv"
 	"testing"
@@ -60,11 +62,26 @@ func setup() transaction.TX {
 	return undoTx
 }
 
-func assertEqual(t *testing.T, a interface{}, b interface{}) {
-	if a != b {
-		debug.PrintStack()
-		t.Fatal(fmt.Sprintf("%v != %v", a, b))
+func assertEqual(t *testing.T, actual, expected interface{}) {
+	if expected == nil || actual == nil {
+		if expected == actual {
+			return
+		}
+	} else if exp, ok := expected.([]byte); ok {
+		act, ok := actual.([]byte)
+		if ok {
+			if exp == nil && act == nil {
+				return
+			}
+			if bytes.Equal(exp, act) {
+				return
+			}
+		}
+	} else if reflect.DeepEqual(expected, actual) {
+		return
 	}
+	debug.PrintStack()
+	t.Fatal("Not equal!", actual, expected)
 }
 
 func BenchmarkDictSet(b *testing.B) {
