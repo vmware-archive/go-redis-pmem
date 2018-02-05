@@ -26,8 +26,8 @@ type (
 )
 
 func Init(logArea []byte) {
-	// currently only support simple undo logging transaction.
-	InitUndo(logArea)
+	InitUndo(logArea[:len(logArea)/2])
+	InitGCUndo(logArea[len(logArea)/2:])
 }
 
 func Release(t TX) {
@@ -35,6 +35,8 @@ func Release(t TX) {
 	switch v := t.(type) {
 	case *undoTx:
 		releaseUndo(v)
+	case *gcTx:
+		releaseGCUndo(v)
 	case *readonlyTx:
 		releaseReadonly(v)
 	default:

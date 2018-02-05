@@ -191,8 +191,13 @@ func (db *redisDb) lookupKey(key []byte) interface{} {
 
 func (db *redisDb) randomKey() *entry {
 	for {
-		k := db.dict.randomKey()
-		return k
+		entry := db.dict.randomKey()
+		if entry == nil {
+			return entry
+		}
+		if db.checkLiveKey(entry.key) {
+			return entry
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -14,12 +15,12 @@ type basic struct {
 }
 
 var (
-	b      = false
-	i      = 0
-	slice1 = make([]int, 100, 100)
-	slice2 = make([]int, 100, 100)
-	s1     = basic{1, nil, slice1}
-	s2     = basic{2, nil, slice2}
+	b      bool
+	i      int
+	slice1 []int
+	slice2 []int
+	s1     basic
+	s2     basic
 )
 
 func setup() TX {
@@ -28,8 +29,22 @@ func setup() TX {
 }
 
 func TestLog(t *testing.T) {
-	undoTx := setup()
+	Init(make([]byte, LOGSIZE))
+	testLog(t, NewUndo())
+	testLog(t, NewGCUndo())
+}
 
+func resetData() {
+	b = false
+	i = 0
+	slice1 = make([]int, 100, 100)
+	slice2 = make([]int, 100, 100)
+	s1 = basic{1, nil, slice1}
+	s2 = basic{2, nil, slice2}
+}
+
+func testLog(t *testing.T, undoTx TX) {
+	resetData()
 	fmt.Println("Testing basic data type commit.")
 	undoTx.Begin()
 	undoTx.Log(&b)
@@ -130,6 +145,7 @@ func TestLog(t *testing.T) {
 }
 
 func TestConcurrentLog(t *testing.T) {
+	resetData()
 	m1 := new(sync.RWMutex)
 	m2 := new(sync.RWMutex)
 	Init(make([]byte, LOGSIZE))
@@ -137,7 +153,7 @@ func TestConcurrentLog(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(i int) {
 			time.Sleep(time.Duration(1) * time.Second)
-			undo := NewUndo()
+			undo := NewGCUndo()
 			undo.Begin()
 			undo.WLock(m1)
 			undo.Log(&s1)
@@ -186,6 +202,7 @@ func BenchmarkLogSlice(b *testing.B) {
 
 func assertEqual(t *testing.T, a interface{}, b interface{}) {
 	if a != b {
+		debug.PrintStack()
 		t.Fatal(fmt.Sprintf("%v != %v", a, b))
 	}
 }
