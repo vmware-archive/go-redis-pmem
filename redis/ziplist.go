@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bytes"
 	"encoding/binary"
 	_ "fmt"
 	"math"
@@ -11,8 +12,8 @@ import (
 
 type (
 	ziplist struct {
-		zltail  uint32
-		entries uint32
+		zltail  int
+		entries uint
 		data    []byte
 	}
 
@@ -64,7 +65,7 @@ func (zl *ziplist) Index(idx int) int {
 	if idx < 0 { // travel backward
 		idx = (-idx) - 1
 		if len(zl.data) > 0 {
-			pos = int(zl.zltail)
+			pos = zl.zltail
 			_, prevlen := zipEntryPrevlen(zl.data[pos:])
 			for prevlen > 0 && idx > 0 {
 				idx--
@@ -85,6 +86,82 @@ func (zl *ziplist) Index(idx int) int {
 	}
 }
 
+/* compare entry at pos with given val. */
+func (zl *ziplist) Compare(pos int, val interface{}) bool {
+	s, ll, encoding := zipTryEncoding(val)
+	return zl.compare(pos, s, ll, encoding)
+}
+
+func (zl *ziplist) compare(pos int, s []byte, ll int64, encoding byte) bool {
+	e := zl.Get(pos)
+	if encoding < ZIP_STR_MASK {
+		v, ok := e.([]byte)
+		if !ok {
+			return false
+		} else {
+			return bytes.Equal(s, v)
+		}
+	} else {
+		v, ok := e.(int64)
+		if !ok {
+			return false
+		} else {
+			return ll == v
+		}
+	}
+}
+
+/* find a given val in ziplist and return pos or -1, skip 'skip' entries between every comparison. */
+func (zl *ziplist) Find(val interface{}, skip uint) int {
+	skipcnt := uint(0)
+	s, ll, encoding := zipTryEncoding(val)
+	for pos := 0; pos >= 0; {
+		if skipcnt == 0 {
+			if zl.compare(pos, s, ll, encoding) {
+				return pos
+			}
+			skipcnt = skip
+		} else {
+			skipcnt--
+		}
+		pos = zl.Next(pos)
+	}
+	return -1
+}
+
+/* return offset of next entry given current entry offset. */
+func (zl *ziplist) Next(pos int) int {
+	if pos >= len(zl.data) || pos < 0 {
+		return -1
+	}
+	pos += int(zipEntrylen(zl.data[pos:]))
+	if pos == len(zl.data) {
+		return -1
+	} else {
+		return pos
+	}
+}
+
+/* return offset of previous entry given current entry offset. */
+func (zl *ziplist) Prev(pos int) int {
+	if pos == 0 {
+		return -1
+	} else if pos == -1 || pos == len(zl.data) {
+		if len(zl.data) == 0 {
+			return -1
+		} else {
+			return zl.zltail
+		}
+	} else {
+		_, prevlen := zipEntryPrevlen(zl.data[pos:])
+		return pos - int(prevlen)
+	}
+}
+
+func (zl *ziplist) Len() int {
+	return len(zl.data)
+}
+
 /* push val to the tail of list. */
 func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
 	if head {
@@ -92,6 +169,40 @@ func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
 	} else {
 		zl.insert(tx, len(zl.data), val)
 	}
+}
+
+/* delete a single entry at pos */
+func (zl *ziplist) Delete(tx transaction.TX, pos int) {
+	zl.delete(tx, pos, 1)
+}
+
+/* delete range of entries from pos. */
+func (zl *ziplist) DeleteRange(tx transaction.TX, idx int, num uint) {
+	pos := zl.Index(idx)
+	if pos >= 0 {
+		zl.delete(tx, pos, num)
+	}
+}
+
+/* append zl2 to zl */
+func (zl *ziplist) Merge(tx transaction.TX, zl2 *ziplist) {
+	if zl == zl2 {
+		return // do not allow merge self
+	}
+	tx.Log(zl)
+	// update entries and new tail position
+	zl.entries += zl2.entries
+	oldtail := zl.zltail
+	zl.zltail = zl2.zltail + len(zl.data)
+	// concate data into newdata. TODO: efficient pmem realloc/memmove
+	newdata := pmake([]byte, len(zl.data)+len(zl2.data))
+	copy(newdata, zl.data)
+	copy(newdata[len(zl.data):], zl2.data)
+	// cascade update
+	tailshift := 0
+	newdata, tailshift = cascadeUpdate(newdata, oldtail)
+	zl.zltail += tailshift
+	zl.data = newdata
 }
 
 func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
@@ -130,18 +241,57 @@ func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
 	copy(newdata[pos:], entry)
 	copy(newdata[pos+len(entry):], zl.data[pos:])
 	if pos == len(zl.data) { // insert to the tail
-		zl.zltail = uint32(len(zl.data))
+		zl.zltail = len(zl.data)
 		// fmt.Println("insert to tail, new tail", zl.zltail)
 	} else { // insert into middle, need to update prevlen of following entries
 		// cascade update following entries
 		newdata, tailShift = cascadeUpdate(newdata, pos)
-		zl.zltail += uint32(len(entry) + tailShift)
+		zl.zltail += len(entry) + tailShift
 		// fmt.Println("insert to middle, new tail", zl.zltail)
 	}
 	transaction.Persist(unsafe.Pointer(&newdata[0]), len(newdata))
 	zl.data = newdata
 	zl.entries++
 	// fmt.Println("insert finish, new entries, len", zl.entries, len(zl.data), zl.data)
+}
+
+func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
+	deleted := uint(0)
+	end := pos
+	for deleted < num && end >= 0 {
+		end = zl.Next(end)
+		deleted++
+	}
+	if deleted > 0 {
+		tx.Log(zl)
+		zl.entries -= deleted
+		prevlensize, prevlen := zipEntryPrevlen(zl.data[pos:])
+		if end == -1 {
+			/* delete entire tails, directly cut slice in this case to save copying cost.
+			 * TODO: downside is that the cutted tail will not be garbage collected. */
+			zl.data = zl.data[:pos]
+			zl.zltail = pos - int(prevlen)
+		} else {
+			/* use prevlen of first deleted entry to replace the prevlen of the new next entry. */
+			oldprevlensize, _ := zipEntryPrevlen(zl.data[end:])
+			if zl.zltail == end {
+				// need to consider the prevlen size diff if change the prevlen field of tail
+				zl.zltail = pos
+			} else {
+				zl.zltail -= (end - pos + int(oldprevlensize-prevlensize))
+			}
+			pos += int(prevlensize)
+			end += int(oldprevlensize)
+			newdata := pmake([]byte, len(zl.data)-(end-pos))
+			copy(newdata, zl.data[:pos])
+			copy(newdata[pos:], zl.data[end:])
+			// cascade update prevlen
+			newdata, tailShift := cascadeUpdate(newdata, pos-int(prevlensize))
+			transaction.Persist(unsafe.Pointer(&newdata[0]), len(newdata))
+			zl.data = newdata
+			zl.zltail += tailShift
+		}
+	}
 }
 
 func cascadeUpdate(data []byte, pos int) ([]byte, int) {
