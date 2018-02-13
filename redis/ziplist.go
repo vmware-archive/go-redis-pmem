@@ -3,7 +3,7 @@ package redis
 import (
 	"bytes"
 	"encoding/binary"
-	_ "fmt"
+	"fmt"
 	"math"
 	"pmem/transaction"
 	"strconv"
@@ -509,4 +509,32 @@ func zipLoadInteger(v []byte, encoding byte) int64 {
 		panic("Save unknown interger encoding.")
 	}
 	return ret
+}
+
+func (zl *ziplist) deepCopy(tx transaction.TX) *ziplist {
+	newzl := ziplistNew(tx)
+	newdata := pmake([]byte, zl.Len())
+	copy(newdata, zl.data)
+	transaction.Persist(unsafe.Pointer(&newdata[0]), len(newdata))
+
+	tx.Log(newzl)
+	newzl.entries = zl.entries
+	newzl.zltail = zl.zltail
+	newzl.data = newdata
+	return newzl
+}
+
+func (zl *ziplist) print() {
+	fmt.Print("[", zl.entries, " ", zl.zltail, " ", zl.Len(), ": ")
+	for i := 0; i < int(zl.entries); i++ {
+		p := zl.Index(i)
+		v := zl.Get(p)
+		switch s := v.(type) {
+		case []byte:
+			fmt.Print(p, " ", string(s), ", ")
+		default:
+			fmt.Print(p, " ", s, ", ")
+		}
+	}
+	fmt.Print("]\n")
 }

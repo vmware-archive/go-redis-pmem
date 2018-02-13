@@ -2,6 +2,7 @@ package redis
 
 import (
 	"fmt"
+	"os"
 	"pmem/region"
 	"pmem/transaction"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 
 func TestZiplistBasic(t *testing.T) {
 	fmt.Println("Basic index/get tests.")
+	os.Remove("testziplist")
 	offset := runtime.PmallocInit("testziplist", transaction.LOGSIZE, DATASIZE)
 	region.InitMeta(offset, transaction.LOGSIZE, UUID)
 	tx := transaction.NewUndo()
