@@ -671,3 +671,39 @@ func (ql *quicklist) print() {
 	}
 	fmt.Print("]\n")
 }
+
+func (ql *quicklist) verify() bool {
+	size := 0
+	iter := ql.GetIterator(true)
+	var entry quicklistEntry
+	for iter.Next(&entry) {
+		size++
+	}
+	if size != ql.count {
+		println("ql len mismatch when iterate forward!")
+		return false
+	}
+	size = 0
+	iter = ql.GetIterator(false)
+	for iter.Next(&entry) {
+		size++
+	}
+	if size != ql.count {
+		println("ql len mismatch when iterate backward!")
+		return false
+	}
+	size = 0
+	node := ql.head
+	for node != nil {
+		size += int(node.zl.entries)
+		if !node.zl.verify() {
+			return false
+		}
+		node = node.next
+	}
+	if size != ql.count {
+		println("ql len mismatch with zl entries!")
+		return false
+	}
+	return true
+}

@@ -278,13 +278,14 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 				// need to consider the prevlen size diff if change the prevlen field of tail
 				zl.zltail = pos
 			} else {
-				zl.zltail -= (end - pos + int(oldprevlensize-prevlensize))
+				zl.zltail -= (end - pos + int(oldprevlensize) - int(prevlensize))
 			}
 			pos += int(prevlensize)
 			end += int(oldprevlensize)
 			newdata := pmake([]byte, len(zl.data)-(end-pos))
 			copy(newdata, zl.data[:pos])
 			copy(newdata[pos:], zl.data[end:])
+
 			// cascade update prevlen
 			newdata, tailShift := cascadeUpdate(newdata, pos-int(prevlensize))
 			transaction.Persist(unsafe.Pointer(&newdata[0]), len(newdata))
@@ -496,11 +497,11 @@ func zipSaveInteger(v []byte, ll int64, encoding byte) uint32 {
 func zipLoadInteger(v []byte, encoding byte) int64 {
 	var ret int64
 	if encoding == ZIP_INT_8B {
-		ret = int64(v[0])
+		ret = int64(int8(v[0]))
 	} else if encoding == ZIP_INT_16B {
-		ret = int64(binary.LittleEndian.Uint16(v))
+		ret = int64(int16(binary.LittleEndian.Uint16(v)))
 	} else if encoding == ZIP_INT_32B {
-		ret = int64(binary.LittleEndian.Uint32(v))
+		ret = int64(int32(binary.LittleEndian.Uint32(v)))
 	} else if encoding == ZIP_INT_64B {
 		ret = int64(binary.LittleEndian.Uint64(v))
 	} else if encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX {
@@ -537,4 +538,35 @@ func (zl *ziplist) print() {
 		}
 	}
 	fmt.Print("]\n")
+}
+
+func (zl *ziplist) verify() bool {
+	if zl.Len() == 0 {
+		if zl.entries != 0 || zl.zltail != 0 {
+			println("zl size mismatch with data len!")
+			return false
+		}
+		return true
+	}
+	size := uint(0)
+	pos := 0
+	for pos >= 0 {
+		size++
+		pos = zl.Next(pos)
+	}
+	if size != zl.entries {
+		println("zl size mismatch when iterate forward!")
+		return false
+	}
+	size = 0
+	pos = zl.Len()
+	for pos > 0 {
+		size++
+		pos = zl.Prev(pos)
+	}
+	if size != zl.entries {
+		println("zl size mismatch when iterate backward!")
+		return false
+	}
+	return true
 }

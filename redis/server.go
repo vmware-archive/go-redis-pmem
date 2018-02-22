@@ -52,8 +52,10 @@ type (
 	}
 
 	sharedObjects struct {
-		crlf, czero, cone, ok, nullbulk, emptybulk, emptymultibulk,
-		syntaxerr, wrongtypeerr, outofrangeerr, bulkhead, inthead, arrayhead,
+		crlf, czero, cone, cnegone,
+		ok, nullbulk, emptybulk, emptymultibulk, pong,
+		syntaxerr, wrongtypeerr, outofrangeerr, nokeyerr,
+		bulkhead, inthead, arrayhead,
 		maxstring, minstring []byte
 	}
 )
@@ -71,9 +73,13 @@ const (
 var (
 	shared            sharedObjects
 	redisCommandTable = [...]redisCommand{
+		redisCommand{"PING", pingCommand, CMD_READONLY},
 		redisCommand{"GET", getCommand, CMD_READONLY},
 		redisCommand{"GETRANGE", getrangeCommand, CMD_READONLY},
 		redisCommand{"MGET", mgetCommand, CMD_READONLY},
+		redisCommand{"LLEN", llenCommand, CMD_READONLY},
+		redisCommand{"LINDEX", lindexCommand, CMD_READONLY},
+		redisCommand{"LRANGE", lrangeCommand, CMD_READONLY},
 		redisCommand{"HGET", hgetCommand, CMD_READONLY},
 		redisCommand{"HMGET", hmgetCommand, CMD_READONLY},
 		redisCommand{"HLEN", hlenCommand, CMD_READONLY},
@@ -122,6 +128,17 @@ var (
 		redisCommand{"INCRBYFLOAT", incrbyfloatCommand, CMD_WRITE},
 		redisCommand{"DECR", decrCommand, CMD_WRITE},
 		redisCommand{"DECRBY", decrbyCommand, CMD_WRITE},
+		redisCommand{"LPUSH", lpushCommand, CMD_WRITE},
+		redisCommand{"RPUSH", rpushCommand, CMD_WRITE},
+		redisCommand{"LPUSHX", lpushxCommand, CMD_WRITE},
+		redisCommand{"RPUSHX", rpushxCommand, CMD_WRITE},
+		redisCommand{"LINSERT", linsertCommand, CMD_WRITE},
+		redisCommand{"LSET", lsetCommand, CMD_WRITE},
+		redisCommand{"LPOP", lpopCommand, CMD_WRITE},
+		redisCommand{"RPOP", rpopCommand, CMD_WRITE},
+		redisCommand{"RPOPLPUSH", rpoplpushCommand, CMD_WRITE},
+		redisCommand{"LREM", lremCommand, CMD_WRITE},
+		redisCommand{"LTRIM", ltrimCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"HSET", hsetCommand, CMD_WRITE | CMD_LARGE},
 		redisCommand{"HSETNX", hsetnxCommand, CMD_WRITE},
 		redisCommand{"HINCRBY", hincrbyCommand, CMD_WRITE},
@@ -220,13 +237,16 @@ func createSharedObjects() {
 		crlf:           []byte("\r\n"),
 		czero:          []byte(":0\r\n"),
 		cone:           []byte(":1\r\n"),
+		cnegone:        []byte(":-1\r\n"),
 		ok:             []byte("+OK\r\n"),
 		nullbulk:       []byte("$-1\r\n"),
 		emptybulk:      []byte("$0\r\n\r\n"),
 		emptymultibulk: []byte("*0\r\n"),
+		pong:           []byte("+PONG\r\n"),
 		syntaxerr:      []byte("-ERR syntax error\r\n"),
 		wrongtypeerr:   []byte("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
 		outofrangeerr:  []byte("-ERR index out of range\r\n"),
+		nokeyerr:       []byte("-ERR no such key\r\n"),
 		bulkhead:       []byte("$"),
 		inthead:        []byte(":"),
 		arrayhead:      []byte("*"),
@@ -390,6 +410,7 @@ func (c *client) processCommand() {
 	if c.cmd == nil {
 		c.notSupported()
 	} else {
+		// c.printCommand()
 		if c.cmd.flag&CMD_READONLY > 0 {
 			c.tx = transaction.NewReadonly()
 		} else if c.cmd.flag&CMD_LARGE > 0 { // TODO: check large command by argument number?
@@ -409,6 +430,13 @@ func (c *client) processCommand() {
 
 func (c *client) lookupCommand() {
 	c.cmd = c.s.commands[strings.ToUpper(string(c.argv[0]))]
+}
+
+func (c *client) printCommand() {
+	for _, q := range c.argv {
+		fmt.Print(string(q), " ")
+	}
+	fmt.Print("\n")
 }
 
 func (c *client) notSupported() {
@@ -495,4 +523,12 @@ func getClient() net.Conn {
 	fatalError(err)
 
 	return conn
+}
+
+func pingCommand(c *client) {
+	if c.argc == 1 {
+		c.addReply(shared.pong)
+	} else {
+		c.addReply(c.argv[1])
+	}
 }

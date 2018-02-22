@@ -116,8 +116,22 @@ func getLongDouble(i interface{}) (float64, bool) {
 	}
 }
 
-func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
+func (c *client) getListOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
+	switch i.(type) { //TODO: support ziplist
+	case *quicklist:
+		return i, true
+	case nil:
+		if emptymsg != nil {
+			c.addReply(emptymsg)
+		}
+		return nil, true
+	default:
+		c.addReply(shared.wrongtypeerr)
+		return nil, false
+	}
+}
 
+func (c *client) getHashOrReply(i interface{}, emptymsg []byte) (interface{}, bool) {
 	switch i.(type) { //TODO: support ziplist
 	case *dict:
 		return i, true
