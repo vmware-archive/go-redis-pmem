@@ -9,7 +9,6 @@ package transaction
  *  ------------------------------------------------------------------
  * | undoHeader | log data | entryHeader | log data | entryHeader |...|
  *  ------------------------------------------------------------------
- */
 
 import (
 	"errors"
@@ -41,11 +40,6 @@ type (
 		rlocks     []*sync.RWMutex
 		wlocks     []*sync.RWMutex
 	}
-)
-
-const (
-	LBUFFERSIZE = 512 * 1024
-	BUFFERSIZE  = 4 * 1024
 )
 
 var (
@@ -195,14 +189,14 @@ func (t *undoTx) Commit() error {
 	t.level--
 	if t.level == 0 {
 		defer t.unLock()
-		/* Need to flush current value of logged areas. */
+		// Need to flush current value of logged areas.
 		for t.undoBuf.Tail() > 0 {
 			_, err := t.undoBuf.Read(t.entrySlice)
 			if err != nil {
 				return err
 			}
 
-			/* Flush change. */
+			// Flush change.
 			Persist(unsafe.Pointer(t.undoEntry.offset+undoOff), t.undoEntry.size)
 
 			t.undoBuf.Rewind(t.undoEntry.size)
@@ -266,3 +260,5 @@ func (t *undoTx) unLock() {
 	}
 	t.rlocks = t.rlocks[0:0]
 }
+
+*/

@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	LOGSIZE   int     = 4 * 1024 * 1024
-	CACHELINE uintptr = 64
+	LOGSIZE     int     = 4 * 1024 * 1024
+	CACHELINE   uintptr = 64
+	LBUFFERSIZE         = 512 * 1024
+	BUFFERSIZE          = 4 * 1024
 )
 
 // transaction interface
@@ -26,8 +28,7 @@ type (
 )
 
 func Init(logArea []byte) {
-	InitUndo(logArea[:len(logArea)/2])
-	InitGCUndo(logArea[len(logArea)/2:])
+	InitUndo(logArea[:len(logArea)])
 }
 
 func Release(t TX) {
@@ -35,8 +36,6 @@ func Release(t TX) {
 	switch v := t.(type) {
 	case *undoTx:
 		releaseUndo(v)
-	case *gcTx:
-		releaseGCUndo(v)
 	case *readonlyTx:
 		releaseReadonly(v)
 	default:

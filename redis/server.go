@@ -61,7 +61,7 @@ type (
 )
 
 const (
-	DATASIZE int    = 500 * 1024 * 1024 // 500M (must be mulitply of 8K)
+	DATASIZE int    = 640 * 1024 * 1024 // 500M (must be mulitply of 64M)
 	UUID     int    = 9524
 	PORT     string = ":6379"
 
@@ -223,6 +223,7 @@ func (s *server) init(path string) {
 
 	s.populateCommandTable()
 	createSharedObjects()
+	runtime.EnableGC()
 }
 
 func (s *server) populateCommandTable() {

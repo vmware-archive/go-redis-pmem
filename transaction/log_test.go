@@ -2,6 +2,8 @@ package transaction
 
 import (
 	"fmt"
+	"os"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -29,9 +31,11 @@ func setup() TX {
 }
 
 func TestLog(t *testing.T) {
+	runtime.PmallocInit("_testLog", LOGSIZE, 64*1024*1024)
+	runtime.EnableGC()
 	Init(make([]byte, LOGSIZE))
 	testLog(t, NewUndo())
-	testLog(t, NewGCUndo())
+	os.Remove("_testLog")
 }
 
 func resetData() {
@@ -153,7 +157,7 @@ func TestConcurrentLog(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(i int) {
 			time.Sleep(time.Duration(1) * time.Second)
-			undo := NewGCUndo()
+			undo := NewUndo()
 			undo.Begin()
 			undo.WLock(m1)
 			undo.Log(&s1)

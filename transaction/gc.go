@@ -36,7 +36,7 @@ import (
 
 type (
 	/* PER THREAD tx, hold pointer to log entry array in persistent heap and record log tail position. */
-	gcHeader struct {
+	undoHeader struct {
 		tail int
 		log  []entry
 	}
@@ -50,8 +50,8 @@ type (
 	}
 
 	/* runtime volatile status of tx. */
-	gcTx struct {
-		header *gcHeader
+	undoTx struct {
+		header *undoHeader
 		log    []entry
 		level  int
 		rlocks []*sync.RWMutex
@@ -68,40 +68,40 @@ const (
 )
 
 var (
-	gcUndoPool [2]chan *gcTx // pool[0] for small txs, pool[1] for large txs
+	undoPool [2]chan *undoTx // pool[0] for small txs, pool[1] for large txs
 )
 
 // TODO: correctly swizzle and revert uncommitted logs.
-func InitGCUndo(headerArea []byte) {
-	headersize := int(unsafe.Sizeof(gcHeader{}))
+func InitUndo(headerArea []byte) {
+	headersize := int(unsafe.Sizeof(undoHeader{}))
 	if len(headerArea) < (LLOGNUM+SLOGNUM)*headersize {
-		log.Fatal("Not enough room for init GC undo metadata.")
+		log.Fatal("Not enough room for init undo metadata.")
 	}
 
-	gcUndoPool[0] = make(chan *gcTx, SLOGNUM)
-	gcUndoPool[1] = make(chan *gcTx, LLOGNUM)
+	undoPool[0] = make(chan *undoTx, SLOGNUM)
+	undoPool[1] = make(chan *undoTx, LLOGNUM)
 	pos := 0
 	for i := 0; i < SLOGNUM; i++ {
-		initGCUndo(headerArea[pos:], gcUndoPool[0], SENTRYSIZE)
+		initUndo(headerArea[pos:], undoPool[0], SENTRYSIZE)
 		pos += headersize
 	}
 	for i := 0; i < LLOGNUM; i++ {
-		initGCUndo(headerArea[pos:], gcUndoPool[1], LENTRYSIZE)
+		initUndo(headerArea[pos:], undoPool[1], LENTRYSIZE)
 		pos += headersize
 	}
 	Persist(unsafe.Pointer(&headerArea[0]), pos)
 	sfence()
 }
 
-func initGCUndo(header []byte, txPool chan *gcTx, size int) {
-	tx := new(gcTx)
-	tx.header = (*gcHeader)(unsafe.Pointer(&header[0]))
+func initUndo(header []byte, txPool chan *undoTx, size int) {
+	tx := new(undoTx)
+	tx.header = (*undoHeader)(unsafe.Pointer(&header[0]))
 	if tx.header.tail > 0 { // has uncommitted log
 		// TODO: order abort sequence according to global counter
 		tx.log = tx.header.log
 		tx.Abort()
 	} else {
-		tx.header.log = make([]entry, size) // TODO: use pmake
+		tx.header.log = pmake([]entry, size)
 		tx.log = tx.header.log
 	}
 	if size == LENTRYSIZE {
@@ -112,42 +112,55 @@ func initGCUndo(header []byte, txPool chan *gcTx, size int) {
 	txPool <- tx
 }
 
-func NewGCUndo() TX {
-	if gcUndoPool[0] == nil {
-		log.Fatal("GCUndo log not correctly initialized!")
+func NewUndo() TX {
+	if undoPool[0] == nil {
+		log.Fatal("Undo log not correctly initialized!")
 	}
-	t := <-gcUndoPool[0]
+	t := <-undoPool[0]
 	// log.Println("Get log ", t.id)
 	return t
 }
 
-func NewLargeGCUndo() TX {
-	if gcUndoPool[1] == nil {
-		log.Fatal("GCUndo log not correctly initialized!")
+func NewLargeUndo() TX {
+	if undoPool[1] == nil {
+		log.Fatal("Undo log not correctly initialized!")
 	}
-	t := <-gcUndoPool[1]
+	t := <-undoPool[1]
 	// log.Println("Get log ", t.id)
 	return t
 }
 
-func releaseGCUndo(t *gcTx) {
+func releaseUndo(t *undoTx) {
 	t.Abort()
 	// log.Println("Release log ", t.id)
 	if t.large {
-		gcUndoPool[1] <- t
+		undoPool[1] <- t
 	} else {
-		gcUndoPool[0] <- t
+		undoPool[0] <- t
 	}
 }
 
-func (t *gcTx) setGCUndoHdr(tail int) {
+func (t *undoTx) setUndoHdr(tail int) {
 	sfence()
 	t.header.tail = tail // atomic update
 	clflush(unsafe.Pointer(t.header))
 	sfence()
 }
 
-func (t *gcTx) Log(data interface{}) error {
+type Value struct {
+	typ  unsafe.Pointer
+	ptr  unsafe.Pointer
+	flag uintptr
+}
+
+// sliceHeader is the datastructure representation of a slice object
+type sliceHeader struct {
+	data unsafe.Pointer
+	len  int
+	cap  int
+}
+
+func (t *undoTx) Log(data interface{}) error {
 	// Check data type, allocate and assign copy of data.
 	var (
 		v1   reflect.Value = reflect.ValueOf(data)
@@ -158,18 +171,27 @@ func (t *gcTx) Log(data interface{}) error {
 	switch kind := v1.Kind(); kind {
 	case reflect.Slice:
 		typ = v1.Type()
-		size = v1.Len() * int(typ.Elem().Size())
-		newptr := reflect.New(typ)                             // create a new empty slice to hold data
-		v2 = reflect.AppendSlice(reflect.Indirect(newptr), v1) // copy old data, TODO: use PAppendSlice
+		v1len := v1.Len()
+		size = v1len * int(typ.Elem().Size())
+
+		v2 = reflect.PMakeSlice(typ, v1len, v1len)
+		vptr := (*Value)(unsafe.Pointer(&v2))
+		vshdr := (*sliceHeader)(vptr.ptr)
+		sourceVal := (*Value)(unsafe.Pointer(&v1))
+		sshdr := (*sliceHeader)(sourceVal.ptr)
+		source_ptr := (*[LBUFFERSIZE]byte)(sshdr.data)[:size:size]
+		dest_ptr := (*[LBUFFERSIZE]byte)(vshdr.data)[:size:size]
+		copy(dest_ptr, source_ptr)
+
 	case reflect.Ptr:
 		oldv := reflect.Indirect(v1) // get the underlying data of pointer
 		typ = oldv.Type()
 		size = int(typ.Size())
-		v2 = reflect.New(oldv.Type())  // TODO: pnew
+		v2 = reflect.PNew(oldv.Type())
 		reflect.Indirect(v2).Set(oldv) // copy old data
 	default:
 		debug.PrintStack()
-		return errors.New("tx.GCundo: Log data must be pointer/slice!")
+		return errors.New("tx.undo: Log data must be pointer/slice!")
 	}
 	// Append data to log entry.
 	tail := t.header.tail
@@ -182,22 +204,22 @@ func (t *gcTx) Log(data interface{}) error {
 	Persist(unsafe.Pointer(&t.log[tail]), int(unsafe.Sizeof(t.log[tail])))
 
 	// Update log offset in header.
-	t.setGCUndoHdr(tail + 1)
+	t.setUndoHdr(tail + 1)
 	return nil
 }
 
-func (t *gcTx) FakeLog(interface{}) {
+func (t *undoTx) FakeLog(interface{}) {
 	// No logging
 }
 
-func (t *gcTx) Begin() error {
+func (t *undoTx) Begin() error {
 	t.level += 1
 	return nil
 }
 
-func (t *gcTx) Commit() error {
+func (t *undoTx) Commit() error {
 	if t.level == 0 {
-		return errors.New("tx.GCundo: no transaction to commit!")
+		return errors.New("tx.undo: no transaction to commit!")
 	}
 	t.level--
 	if t.level == 0 {
@@ -206,12 +228,12 @@ func (t *gcTx) Commit() error {
 		for i := t.header.tail - 1; i >= 0; i-- {
 			Persist(t.log[i].ptr, t.log[i].size)
 		}
-		t.setGCUndoHdr(0) // discard all logs.
+		t.setUndoHdr(0) // discard all logs.
 	}
 	return nil
 }
 
-func (t *gcTx) Abort() error {
+func (t *undoTx) Abort() error {
 	defer t.unLock()
 	t.level = 0
 	/* Replay undo logs. */
@@ -221,27 +243,27 @@ func (t *gcTx) Abort() error {
 		copy(original, logdata)
 		Persist(t.log[i].ptr, t.log[i].size)
 	}
-	t.setGCUndoHdr(0)
+	t.setUndoHdr(0)
 	return nil
 }
 
-func (t *gcTx) RLock(m *sync.RWMutex) {
+func (t *undoTx) RLock(m *sync.RWMutex) {
 	m.RLock()
 	//log.Println("Log ", t.id, " rlocking ", m)
 	t.rlocks = append(t.rlocks, m)
 }
 
-func (t *gcTx) WLock(m *sync.RWMutex) {
+func (t *undoTx) WLock(m *sync.RWMutex) {
 	m.Lock()
 	//log.Println("Log ", t.id, " wlocking ", m)
 	t.wlocks = append(t.wlocks, m)
 }
 
-func (t *gcTx) Lock(m *sync.RWMutex) {
+func (t *undoTx) Lock(m *sync.RWMutex) {
 	t.WLock(m)
 }
 
-func (t *gcTx) unLock() {
+func (t *undoTx) unLock() {
 	for _, m := range t.wlocks {
 		//log.Println("Log ", t.id, " unlocking ", m)
 		m.Unlock()

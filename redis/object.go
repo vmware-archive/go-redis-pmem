@@ -8,6 +8,52 @@ import (
 	"unsafe"
 )
 
+// persistent / volatile type interface & alias
+
+type (
+	Persistent interface {
+		Persist(interface{})  // deep copy volatile data into already allocated persistent data
+		Flush()				  // flush underlying data into pmem
+	}
+
+ 	Volatile interface {
+		Persist() Persistent  // allocate persistent data, deep copy volatile data into it
+	}
+
+	pbytes []byte	// persistent byte slice
+	vbytes []byte   // volatile byte slice
+)
+
+func (pb *pbytes) Persist(vb interface{}) {
+	switch s := vb.(type) {
+	case []byte:
+		if len(*pb) < len(s) {
+			*pb = pmake([]byte, len(s))
+			transaction.Persist(unsafe.Pointer(pb), unsafe.Sizeof(*pb))
+		}
+		copy(*pb, s)
+		transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(*pb))
+	default: // TODO: should also take pbytes, vbytes, string
+		panic("persisting non byte slice into pbytes!")
+	}
+}
+
+func (pb *pbytes) Flush() {
+	transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(*pb))
+}
+
+func (vb *vbytes) Persist() Persistent {
+	pb := pnew(pbytes)
+	*pb = pmake([]byte, len(vb))
+	if len(vb) > 0 {
+		copy(*pb, v)
+		transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(vb))
+	}
+	return pb
+}
+
+/////////////////////////////////////////
+
 func (c *client) getStringOrReply(i interface{}, emptymsg []byte, errmsg []byte) ([]byte, bool) {
 	s, ok := getString(i)
 	if !ok {
