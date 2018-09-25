@@ -44,8 +44,10 @@ func Release(t TX) {
 }
 
 // directly persist pmem range
-func Persist(p unsafe.Pointer, s int)
+func Flush(p unsafe.Pointer, s int) {
+	runtime.FlushRange(p, uintptr(s))
+}
 
-func sfence()
-
-func clflush(unsafe.Pointer)
+func sfence() {
+	runtime.Fence()
+}

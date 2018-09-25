@@ -12,16 +12,16 @@ import (
 
 type (
 	Persistent interface {
-		Persist(interface{})  // deep copy volatile data into already allocated persistent data
-		Flush()				  // flush underlying data into pmem
+		Persist(interface{}) // deep copy volatile data into already allocated persistent data
+		Flush()              // flush underlying data into pmem
 	}
 
- 	Volatile interface {
-		Persist() Persistent  // allocate persistent data, deep copy volatile data into it
+	Volatile interface {
+		Persist() Persistent // allocate persistent data, deep copy volatile data into it
 	}
 
-	pbytes []byte	// persistent byte slice
-	vbytes []byte   // volatile byte slice
+	pbytes []byte // persistent byte slice
+	vbytes []byte // volatile byte slice
 )
 
 func (pb *pbytes) Persist(vb interface{}) {
@@ -29,17 +29,17 @@ func (pb *pbytes) Persist(vb interface{}) {
 	case []byte:
 		if len(*pb) < len(s) {
 			*pb = pmake([]byte, len(s))
-			transaction.Persist(unsafe.Pointer(pb), unsafe.Sizeof(*pb))
+			transaction.Flush(unsafe.Pointer(pb), unsafe.Sizeof(*pb))
 		}
 		copy(*pb, s)
-		transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(*pb))
+		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*pb))
 	default: // TODO: should also take pbytes, vbytes, string
 		panic("persisting non byte slice into pbytes!")
 	}
 }
 
 func (pb *pbytes) Flush() {
-	transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(*pb))
+	transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*pb))
 }
 
 func (vb *vbytes) Persist() Persistent {
@@ -47,7 +47,7 @@ func (vb *vbytes) Persist() Persistent {
 	*pb = pmake([]byte, len(vb))
 	if len(vb) > 0 {
 		copy(*pb, v)
-		transaction.Persist(unsafe.Pointer(&(*pb)[0]), len(vb))
+		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(vb))
 	}
 	return pb
 }
@@ -244,7 +244,7 @@ func shadowCopyToPmem(v []byte) []byte {
 	pv := pmake([]byte, len(v)) // here pv is actually in volatile memory, but it's pointing to in pmem array.
 	if len(v) > 0 {
 		copy(pv, v)
-		transaction.Persist(unsafe.Pointer(&pv[0]), len(pv)) // shadow update needs to be flushed
+		transaction.Flush(unsafe.Pointer(&pv[0]), len(pv)) // shadow update needs to be flushed
 	}
 	return pv
 }
@@ -254,7 +254,7 @@ func shadowCopyToPmemI(v []byte) interface{} {
 	*pv = pmake([]byte, len(v))
 	if len(v) > 0 {
 		copy(*pv, v)
-		transaction.Persist(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
+		transaction.Flush(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
 	}
 	return pv // make sure interface is pointing to a in pmem slice header
 }
@@ -266,6 +266,6 @@ func shadowConcatToPmemI(v1, v2 []byte, offset, total int) interface{} {
 	*pv = pmake([]byte, total)
 	copy(*pv, v1)
 	copy((*pv)[offset:], v2)
-	transaction.Persist(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
-	return pv                                                // make sure interface is pointing to a in pmem slice header
+	transaction.Flush(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
+	return pv                                              // make sure interface is pointing to a in pmem slice header
 }

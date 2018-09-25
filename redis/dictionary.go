@@ -401,7 +401,7 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e2.key = key
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
-		transaction.Persist(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
+		transaction.Flush(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
 		tx.Log(&d.tab[t].bucket[b])
 		d.tab[t].bucket[b] = e2
 		s := d.shard(b)

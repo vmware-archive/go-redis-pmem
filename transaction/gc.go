@@ -89,7 +89,7 @@ func InitUndo(headerArea []byte) {
 		initUndo(headerArea[pos:], undoPool[1], LENTRYSIZE)
 		pos += headersize
 	}
-	Persist(unsafe.Pointer(&headerArea[0]), pos)
+	Flush(unsafe.Pointer(&headerArea[0]), pos)
 	sfence()
 }
 
@@ -143,7 +143,7 @@ func releaseUndo(t *undoTx) {
 func (t *undoTx) setUndoHdr(tail int) {
 	sfence()
 	t.header.tail = tail // atomic update
-	clflush(unsafe.Pointer(t.header))
+	Flush(unsafe.Pointer(t.header), int(unsafe.Sizeof(t.header.tail)))
 	sfence()
 }
 
@@ -200,8 +200,8 @@ func (t *undoTx) Log(data interface{}) error {
 	t.log[tail].size = size                         // size of data
 
 	// Flush logged data copy and entry.
-	Persist(t.log[tail].data, size)
-	Persist(unsafe.Pointer(&t.log[tail]), int(unsafe.Sizeof(t.log[tail])))
+	Flush(t.log[tail].data, size)
+	Flush(unsafe.Pointer(&t.log[tail]), int(unsafe.Sizeof(t.log[tail])))
 
 	// Update log offset in header.
 	t.setUndoHdr(tail + 1)
@@ -226,7 +226,7 @@ func (t *undoTx) Commit() error {
 		defer t.unLock()
 		/* Need to flush current value of logged areas. */
 		for i := t.header.tail - 1; i >= 0; i-- {
-			Persist(t.log[i].ptr, t.log[i].size)
+			Flush(t.log[i].ptr, t.log[i].size)
 		}
 		t.setUndoHdr(0) // discard all logs.
 	}
@@ -241,7 +241,7 @@ func (t *undoTx) Abort() error {
 		original := (*[LBUFFERSIZE]byte)(t.log[i].ptr)[:t.log[i].size:t.log[i].size]
 		logdata := (*[LBUFFERSIZE]byte)(t.log[i].data)[:t.log[i].size:t.log[i].size]
 		copy(original, logdata)
-		Persist(t.log[i].ptr, t.log[i].size)
+		Flush(t.log[i].ptr, t.log[i].size)
 	}
 	t.setUndoHdr(0)
 	return nil
