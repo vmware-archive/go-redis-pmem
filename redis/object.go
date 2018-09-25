@@ -29,7 +29,7 @@ func (pb *pbytes) Persist(vb interface{}) {
 	case []byte:
 		if len(*pb) < len(s) {
 			*pb = pmake([]byte, len(s))
-			transaction.Flush(unsafe.Pointer(pb), unsafe.Sizeof(*pb))
+			transaction.Flush(unsafe.Pointer(pb), int(unsafe.Sizeof(*pb)))
 		}
 		copy(*pb, s)
 		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*pb))
@@ -44,10 +44,10 @@ func (pb *pbytes) Flush() {
 
 func (vb *vbytes) Persist() Persistent {
 	pb := pnew(pbytes)
-	*pb = pmake([]byte, len(vb))
-	if len(vb) > 0 {
-		copy(*pb, v)
-		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(vb))
+	*pb = pmake([]byte, len(*vb))
+	if len(*vb) > 0 {
+		copy(*pb, *vb)
+		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*vb))
 	}
 	return pb
 }
