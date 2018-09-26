@@ -2,10 +2,7 @@ package region
 
 import (
 	"log"
-	"os"
-	"pmem/heap"
 	"pmem/transaction"
-	"syscall"
 	"unsafe"
 )
 
@@ -27,46 +24,6 @@ type pmemHeader struct {
 
 // a volaitle copy of the region header
 var _region *pmemHeader
-
-func mmap(fname string, size int) (fdata []byte) {
-	f, err := os.OpenFile(fname,
-		os.O_CREATE|os.O_RDWR,
-		0666)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = f.Truncate(int64(size))
-	if err != nil {
-		log.Fatal(err)
-	}
-	fdata, err = syscall.Mmap(int(f.Fd()),
-		0,
-		size,
-		syscall.PROT_WRITE|syscall.PROT_READ,
-		syscall.MAP_SHARED)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return fdata
-}
-
-func Init(pathname string, size, uuid int) {
-	// (1) mmap region
-	fdata := mmap(pathname, size)
-
-	// (2) read pmem header from mmaped region
-	_region = (*pmemHeader)(unsafe.Pointer(&fdata[0]))
-	hdSize := int(unsafe.Sizeof(*_region))
-
-	// (3) init log and heap
-	transaction.Init(fdata[hdSize:(hdSize + transaction.LOGSIZE)])
-	undoTx := transaction.NewUndo()
-	heapOffset := hdSize + transaction.LOGSIZE
-	heap.Init(undoTx, fdata[heapOffset:], size-heapOffset)
-
-	// (4) update pmem region header
-	initMeta(unsafe.Pointer(&fdata[0]), size, uuid)
-}
 
 func InitMeta(ptr unsafe.Pointer, size, uuid int) bool {
 	_region = (*pmemHeader)(ptr)
