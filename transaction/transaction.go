@@ -44,11 +44,17 @@ func Release(t TX) {
 	}
 }
 
-// directly persist pmem range
+// Flush changes to persistent memory region at address p and size s
 func Flush(p unsafe.Pointer, s int) {
 	runtime.FlushRange(p, uintptr(s))
 }
 
 func sfence() {
 	runtime.Fence()
+}
+
+// Persist calls into the runtime to flush changes to the persistent memory region
+// and also calls a fence instruction as required
+func Persist(p unsafe.Pointer, s int) {
+	runtime.PersistRange(p, uintptr(s))
 }
