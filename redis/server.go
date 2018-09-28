@@ -3,6 +3,7 @@ package redis
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"pmem/region"
@@ -61,9 +62,10 @@ type (
 )
 
 const (
+	DATABASE string = "./database"
 	DATASIZE int    = 640 * 1024 * 1024 // 500M (must be mulitply of 64M)
-	UUID     int    = 9524
 	PORT     string = ":6379"
+	OFFSET   int    = 0
 
 	CMD_WRITE    int = 1 << 0
 	CMD_READONLY int = 1 << 1
@@ -177,8 +179,8 @@ func RunServer() {
 }
 
 func (s *server) Start() {
-	// init database
-	s.init("test_server")
+	// Initialize database
+	s.init(DATABASE)
 
 	// accept client connections
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", PORT)
@@ -188,7 +190,7 @@ func (s *server) Start() {
 	fatalError(err)
 
 	go s.Cron()
-
+	fmt.Println("Go-redis is ready to accept connections")
 	for {
 		conn, err := listener.AcceptTCP()
 		if err != nil {
@@ -200,30 +202,44 @@ func (s *server) Start() {
 }
 
 func (s *server) init(path string) {
-	offset := runtime.PmallocInit(path, transaction.LOGSIZE, DATASIZE)
-	isNew := region.InitMeta(offset, transaction.LOGSIZE, UUID)
-	pstart = uintptr(offset)
-	pend = pstart + uintptr(DATASIZE)
-	fmt.Println("pmem region: ", unsafe.Pointer(pstart), " ", unsafe.Pointer(pend))
-	tx := transaction.NewUndo()
-	if isNew {
+	mapAddr := runtime.PmemInit(path, DATASIZE, OFFSET)
+	if mapAddr == nil {
+		log.Fatal("Persistent memory initialization failed")
+	}
+
+	rootPtr := runtime.GetRoot()
+	if rootPtr == nil { // indicates a first time initialization
+		// Initialize application specific metadata which will be set as the
+		// application root pointer.
+		regionRoot := region.Init(mapAddr, DATASIZE)
 		db := pnew(redisDb)
+		tx := transaction.NewUndo()
 		tx.Log(db)
 		db.dict = NewDict(tx, 1024, 32)
 		db.expire = NewDict(tx, 128, 1)
-		region.SetRoot(tx, unsafe.Pointer(db))
+		tx.Commit()
+		transaction.Release(tx)
 		s.db = db
-	} else {
-		//debug.SetGCPercent(-1)
-		s.db = (*redisDb)(region.GetRoot())
-		s.db.swizzle(tx)
-	}
-	tx.Commit()
-	transaction.Release(tx)
+		// Set the database pointer in the region header.
+		region.SetDbRoot(unsafe.Pointer(db))
 
+		// SetRoot() sets the region root pointer as the application root pointer.
+		// Any updates to persistent memory until this point can be done without
+		// transactional logging because without setting the application root
+		// pointer, these updates will be lost in the next run of the application.
+		runtime.SetRoot(regionRoot)
+	} else {
+		region.ReInit(rootPtr, DATASIZE)
+		s.db = (*redisDb)(region.GetDbRoot())
+		tx := transaction.NewUndo()
+		s.db.swizzle(tx)
+		tx.Commit()
+		transaction.Release(tx)
+	}
+
+	runtime.EnableGC(100)
 	s.populateCommandTable()
 	createSharedObjects()
-	runtime.EnableGC()
 }
 
 func (s *server) populateCommandTable() {

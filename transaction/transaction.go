@@ -28,8 +28,9 @@ type (
 	}
 )
 
-func Init(logArea []byte) {
-	InitUndo(logArea[:len(logArea)])
+// Transaction initialization function.
+func Init(gcPtr unsafe.Pointer) unsafe.Pointer {
+	return InitUndo(gcPtr)
 }
 
 func Release(t TX) {

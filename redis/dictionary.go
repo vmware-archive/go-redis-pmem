@@ -58,7 +58,6 @@ type (
 )
 
 func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
-	// should be replaced with pNew(dict)
 	d := pnew(dict)
 
 	tx.Begin()

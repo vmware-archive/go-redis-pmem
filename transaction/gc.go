@@ -71,42 +71,64 @@ var (
 	undoPool [2]chan *undoTx // pool[0] for small txs, pool[1] for large txs
 )
 
-// TODO: correctly swizzle and revert uncommitted logs.
-func InitUndo(headerArea []byte) {
-	headersize := int(unsafe.Sizeof(undoHeader{}))
-	if len(headerArea) < (LLOGNUM+SLOGNUM)*headersize {
-		log.Fatal("Not enough room for init undo metadata.")
-	}
+func InitUndo(gcPtr unsafe.Pointer) unsafe.Pointer {
+	firstInit := gcPtr == nil
 
 	undoPool[0] = make(chan *undoTx, SLOGNUM)
 	undoPool[1] = make(chan *undoTx, LLOGNUM)
-	pos := 0
-	for i := 0; i < SLOGNUM; i++ {
-		initUndo(headerArea[pos:], undoPool[0], SENTRYSIZE)
-		pos += headersize
+
+	// gcSlice is a pointer to a slice of undoHeader pointers
+	// gcSlice pointer is stored in the persistent memory header section
+	gcSlice := (*([]*undoHeader))(gcPtr)
+	if firstInit {
+		gcSlice = pnew([]*undoHeader)
+		*gcSlice = pmake([]*undoHeader, SLOGNUM+LLOGNUM, SLOGNUM+LLOGNUM)
+		for i := 0; i < SLOGNUM+LLOGNUM; i++ {
+			(*gcSlice)[i] = pnew(undoHeader)
+		}
+		Flush(unsafe.Pointer(gcSlice), int(unsafe.Sizeof(*gcSlice)))
 	}
-	for i := 0; i < LLOGNUM; i++ {
-		initUndo(headerArea[pos:], undoPool[1], LENTRYSIZE)
-		pos += headersize
+
+	for i := 0; i < SLOGNUM+LLOGNUM; i++ {
+		commonInit((*gcSlice)[i], i, firstInit)
 	}
-	Flush(unsafe.Pointer(&headerArea[0]), pos)
-	sfence()
+
+	if firstInit {
+		// Metadata related to transactional logging is changed only during
+		// first initialization. Hence, an sfence is necessary only in this
+		// code-path.
+		sfence()
+	}
+
+	return unsafe.Pointer(gcSlice)
 }
 
-func initUndo(header []byte, txPool chan *undoTx, size int) {
+func commonInit(header *undoHeader, index int, firstInit bool) {
+	txPool := undoPool[0]
+	size := SENTRYSIZE
+	if index >= SLOGNUM {
+		txPool = undoPool[1]
+		size = LENTRYSIZE
+	}
+
+	if firstInit {
+		header.log = pmake([]entry, size)
+		Flush(unsafe.Pointer(header), int(unsafe.Sizeof(*header)))
+	}
+
 	tx := new(undoTx)
-	tx.header = (*undoHeader)(unsafe.Pointer(&header[0]))
-	if tx.header.tail > 0 { // has uncommitted log
+	tx.header = header
+	tx.log = tx.header.log
+	if tx.header.tail > 0 {
+		// tail > 0 indicates there is uncommitted log. This is possible only
+		// in the logging library reinitialization code-path.
 		// TODO: order abort sequence according to global counter
-		tx.log = tx.header.log
 		tx.Abort()
-	} else {
-		tx.header.log = pmake([]entry, size)
-		tx.log = tx.header.log
 	}
 	if size == LENTRYSIZE {
 		tx.large = true
 	}
+
 	tx.wlocks = make([]*sync.RWMutex, 0, 3)
 	tx.rlocks = make([]*sync.RWMutex, 0, 3)
 	txPool <- tx
