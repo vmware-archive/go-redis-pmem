@@ -3,7 +3,7 @@ package redis
 import (
 	_ "fmt"
 	"math"
-	"pmem/transaction"
+	"runtime"
 	"strconv"
 	"unsafe"
 )
@@ -29,17 +29,17 @@ func (pb *pbytes) Persist(vb interface{}) {
 	case []byte:
 		if len(*pb) < len(s) {
 			*pb = pmake([]byte, len(s))
-			transaction.Flush(unsafe.Pointer(pb), int(unsafe.Sizeof(*pb)))
+			runtime.FlushRange(unsafe.Pointer(pb), unsafe.Sizeof(*pb))
 		}
 		copy(*pb, s)
-		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*pb))
+		runtime.FlushRange(unsafe.Pointer(&(*pb)[0]), uintptr(len(*pb)))
 	default: // TODO: should also take pbytes, vbytes, string
 		panic("persisting non byte slice into pbytes!")
 	}
 }
 
 func (pb *pbytes) Flush() {
-	transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*pb))
+	runtime.FlushRange(unsafe.Pointer(&(*pb)[0]), uintptr(len(*pb)))
 }
 
 func (vb *vbytes) Persist() Persistent {
@@ -47,7 +47,7 @@ func (vb *vbytes) Persist() Persistent {
 	*pb = pmake([]byte, len(*vb))
 	if len(*vb) > 0 {
 		copy(*pb, *vb)
-		transaction.Flush(unsafe.Pointer(&(*pb)[0]), len(*vb))
+		runtime.FlushRange(unsafe.Pointer(&(*pb)[0]), uintptr(len(*vb)))
 	}
 	return pb
 }
@@ -244,7 +244,7 @@ func shadowCopyToPmem(v []byte) []byte {
 	pv := pmake([]byte, len(v)) // here pv is actually in volatile memory, but it's pointing to in pmem array.
 	if len(v) > 0 {
 		copy(pv, v)
-		transaction.Flush(unsafe.Pointer(&pv[0]), len(pv)) // shadow update needs to be flushed
+		runtime.FlushRange(unsafe.Pointer(&pv[0]), uintptr(len(pv))) // shadow update needs to be flushed
 	}
 	return pv
 }
@@ -254,7 +254,7 @@ func shadowCopyToPmemI(v []byte) interface{} {
 	*pv = pmake([]byte, len(v))
 	if len(v) > 0 {
 		copy(*pv, v)
-		transaction.Flush(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
+		runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv))) // shadow update needs to be flushed
 	}
 	return pv // make sure interface is pointing to a in pmem slice header
 }
@@ -266,6 +266,6 @@ func shadowConcatToPmemI(v1, v2 []byte, offset, total int) interface{} {
 	*pv = pmake([]byte, total)
 	copy(*pv, v1)
 	copy((*pv)[offset:], v2)
-	transaction.Flush(unsafe.Pointer(&(*pv)[0]), len(*pv)) // shadow update needs to be flushed
-	return pv                                              // make sure interface is pointing to a in pmem slice header
+	runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv))) // shadow update needs to be flushed
+	return pv                                                        // make sure interface is pointing to a in pmem slice header
 }

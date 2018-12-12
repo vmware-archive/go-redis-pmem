@@ -3,11 +3,12 @@ package redis
 import (
 	"bytes"
 	"fmt"
+	"go-pmem-transaction/transaction"
 	"hash"
 	"hash/fnv"
 	"math"
 	"math/rand"
-	"pmem/transaction"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -74,7 +75,7 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	d.resetTable(tx, 0, d.initSize)
 	d.resetTable(tx, 1, 0)
 	d.rehashIdx = -1
-	tx.Commit()
+	tx.End()
 	return d
 }
 
@@ -97,9 +98,8 @@ func inPMem(a unsafe.Pointer) {
 	if a == nil {
 		return
 	}
-	if uintptr(a) < pstart || uintptr(a) > pend {
-		println(a)
-		panic("Address not in pmem!")
+	if !runtime.InPmem(uintptr(a)) {
+		panic("Address not in pmem")
 	}
 }
 
@@ -116,7 +116,6 @@ func (t *table) swizzle(tx transaction.TX, d *dict) {
 	if s > 0 {
 		shards := d.shard(s)
 		t.bucketlock = make([]sync.RWMutex, shards)
-
 		inPMem(unsafe.Pointer(&t.bucket[0]))
 		inPMem(unsafe.Pointer(&t.used[0]))
 		total := 0
@@ -195,7 +194,7 @@ func memtierhash(key []byte) int {
 
 // rehash and resize
 func (d *dict) Cron(sleep time.Duration) {
-	tx := transaction.NewUndo()
+	tx := transaction.NewUndoTx()
 	var used, size0, size1 int
 	for {
 		if size1 == 0 {
@@ -218,8 +217,9 @@ func (d *dict) Cron(sleep time.Duration) {
 			tx.RLock(d.lock)
 			d.rehashStep(tx)
 		}
-		tx.Commit()
+		tx.End()
 	}
+	transaction.Release(tx)
 }
 
 func (d *dict) rehashStep(tx transaction.TX) {
@@ -297,7 +297,6 @@ func nextPower(s1, s2 int) int {
 
 func (d *dict) lockKey(tx transaction.TX, key []byte) {
 	tx.RLock(d.lock)
-
 	maxt := 0
 	if d.tab[1].mask > 0 {
 		maxt = 1
@@ -400,7 +399,7 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e2.key = key
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
-		transaction.Flush(unsafe.Pointer(e2), int(unsafe.Sizeof(*e2))) // shadow update
+		runtime.FlushRange(unsafe.Pointer(e2), unsafe.Sizeof(*e2)) // shadow update
 		tx.Log(&d.tab[t].bucket[b])
 		d.tab[t].bucket[b] = e2
 		s := d.shard(b)

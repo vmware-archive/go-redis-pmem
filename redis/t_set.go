@@ -1,7 +1,7 @@
 package redis
 
 import (
-	"pmem/transaction"
+	"go-pmem-transaction/transaction"
 	"sort"
 )
 
@@ -276,8 +276,6 @@ func srandmemberWithCountCommand(c *client) {
 	set, ok := c.getSetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
 	if !ok || set == nil {
 		return
-	} else {
-		c.tx.FakeLog(nil) // allow log api for readonly transaction.
 	}
 
 	/* If count is zero, serve an empty multibulk ASAP to avoid special
@@ -372,7 +370,6 @@ func sinterGenericCommand(c *client, setkeys [][]byte, dstkey []byte) {
 	if dstkey == nil { // read only commands
 		keys = setkeys
 		alives = c.db.lockKeysRead(c.tx, keys, 1)
-		c.tx.FakeLog(nil) // allow log api for readonly transaction.
 	} else { // write commands.
 		// TODO: write locks will be automatically aquired for all keys even we only need read locks for source keys.
 		keys = append(setkeys, dstkey)
@@ -483,7 +480,6 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 		if dstkey == nil { // read only commands
 			keys = setkeys
 			alives = c.db.lockKeysRead(c.tx, keys, 1)
-			c.tx.FakeLog(nil) // allow log api for readonly transaction.
 		} else { // write commands.
 			// TODO: write locks will be automatically aquired for all keys even we only need read locks for source keys.
 			keys = append(setkeys, dstkey)

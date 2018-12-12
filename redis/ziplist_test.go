@@ -2,9 +2,9 @@ package redis
 
 import (
 	"fmt"
+	"go-pmem-transaction/transaction"
 	"os"
 	"pmem/region"
-	"pmem/transaction"
 	"runtime"
 	"testing"
 )

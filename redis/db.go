@@ -2,7 +2,7 @@ package redis
 
 import (
 	_ "fmt"
-	"pmem/transaction"
+	"go-pmem-transaction/transaction"
 	_ "strconv"
 	"time"
 )
@@ -24,15 +24,15 @@ func (db *redisDb) Cron() {
 
 // active expire (only check table 0 for simplicity)
 func (db *redisDb) expireCron(sleep time.Duration) {
-	tx := transaction.NewUndo()
+	tx := transaction.NewUndoTx()
 	i := 0
 	ticker := time.NewTicker(sleep)
 	for {
-		tx.Begin()
 		select {
 		case key := <-expired:
-			db.lockKeyWrite(tx, key) // lockKeyWrite calls expireIfNeeded.
+			tx.Exec(db.lockKeyWrite, key) // lockKeyWrite calls expireIfNeeded.
 		case <-ticker.C:
+			tx.Begin()
 			tx.RLock(db.expire.lock)
 			mask := db.expire.tab[0].mask
 			i = i & mask
@@ -53,9 +53,10 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 			if e == nil { // finished checking current bucket
 				i++
 			}
+			tx.End()
 		}
-		tx.Commit()
 	}
+	transaction.Release(tx)
 }
 
 func (db *redisDb) swizzle(tx transaction.TX) {

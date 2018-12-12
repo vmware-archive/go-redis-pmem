@@ -3,11 +3,11 @@ package redis
 import (
 	"bufio"
 	"fmt"
+	"go-pmem-transaction/transaction"
 	"log"
 	"net"
 	"os"
 	"pmem/region"
-	"pmem/transaction"
 	"runtime"
 	_ "runtime/debug"
 	"strconv"
@@ -181,7 +181,6 @@ func RunServer() {
 func (s *server) Start() {
 	// Initialize database
 	s.init(DATABASE)
-
 	// accept client connections
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", PORT)
 	fatalError(err)
@@ -202,22 +201,21 @@ func (s *server) Start() {
 }
 
 func (s *server) init(path string) {
-	mapAddr := runtime.PmemInit(path, DATASIZE, OFFSET)
-	if mapAddr == nil {
+	rootPtr, err := runtime.PmemInit(path, DATASIZE, OFFSET)
+	if err != nil {
 		log.Fatal("Persistent memory initialization failed")
 	}
-
-	rootPtr := runtime.GetRoot()
 	if rootPtr == nil { // indicates a first time initialization
 		// Initialize application specific metadata which will be set as the
 		// application root pointer.
-		regionRoot := region.Init(mapAddr, DATASIZE)
+		regionRoot := region.Init(DATASIZE)
 		db := pnew(redisDb)
-		tx := transaction.NewUndo()
+		tx := transaction.NewUndoTx()
+		tx.Begin()
 		tx.Log(db)
 		db.dict = NewDict(tx, 1024, 32)
 		db.expire = NewDict(tx, 128, 1)
-		tx.Commit()
+		tx.End()
 		transaction.Release(tx)
 		s.db = db
 		// Set the database pointer in the region header.
@@ -231,12 +229,10 @@ func (s *server) init(path string) {
 	} else {
 		region.ReInit(rootPtr, DATASIZE)
 		s.db = (*redisDb)(region.GetDbRoot())
-		tx := transaction.NewUndo()
-		s.db.swizzle(tx)
-		tx.Commit()
+		tx := transaction.NewUndoTx()
+		tx.Exec(s.db.swizzle)
 		transaction.Release(tx)
 	}
-
 	runtime.EnableGC(100)
 	s.populateCommandTable()
 	createSharedObjects()
@@ -429,15 +425,15 @@ func (c *client) processCommand() {
 	} else {
 		// c.printCommand()
 		if c.cmd.flag&CMD_READONLY > 0 {
-			c.tx = transaction.NewReadonly()
+			c.tx = transaction.NewUndoTx()
 		} else if c.cmd.flag&CMD_LARGE > 0 { // TODO: check large command by argument number?
-			c.tx = transaction.NewLargeUndo()
+			c.tx = transaction.NewLargeUndoTx()
 		} else {
-			c.tx = transaction.NewUndo()
+			c.tx = transaction.NewUndoTx()
 		}
 		c.tx.Begin()
 		c.cmd.proc(c)
-		c.tx.Commit()
+		c.tx.End()
 		//c.tx.Abort()
 		transaction.Release(c.tx)
 		c.tx = nil

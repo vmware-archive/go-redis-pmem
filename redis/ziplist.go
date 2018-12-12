@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"go-pmem-transaction/transaction"
 	"math"
-	"pmem/transaction"
+	"runtime"
 	"strconv"
 	"unsafe"
 )
@@ -249,7 +250,7 @@ func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
 		zl.zltail += len(entry) + tailShift
 		// fmt.Println("insert to middle, new tail", zl.zltail)
 	}
-	transaction.Flush(unsafe.Pointer(&newdata[0]), len(newdata))
+	runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
 	zl.data = newdata
 	zl.entries++
 	// fmt.Println("insert finish, new entries, len", zl.entries, len(zl.data), zl.data)
@@ -288,7 +289,7 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 
 			// cascade update prevlen
 			newdata, tailShift := cascadeUpdate(newdata, pos-int(prevlensize))
-			transaction.Flush(unsafe.Pointer(&newdata[0]), len(newdata))
+			runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
 			zl.data = newdata
 			zl.zltail += tailShift
 		}
@@ -516,8 +517,7 @@ func (zl *ziplist) deepCopy(tx transaction.TX) *ziplist {
 	newzl := ziplistNew(tx)
 	newdata := pmake([]byte, zl.Len())
 	copy(newdata, zl.data)
-	transaction.Flush(unsafe.Pointer(&newdata[0]), len(newdata))
-
+	runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
 	tx.Log(newzl)
 	newzl.entries = zl.entries
 	newzl.zltail = zl.zltail

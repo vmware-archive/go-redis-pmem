@@ -5,9 +5,9 @@ package redis
  * However, the outter lock also prevents concurrent writes or read/write into the same hash value. */
 
 import (
+	"go-pmem-transaction/transaction"
 	"math"
 	"math/rand"
-	"pmem/transaction"
 	"strconv"
 )
 
@@ -284,7 +284,7 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 	if p > 5 {
 		return
 	}
-	tx := transaction.NewUndo()
+	tx := transaction.NewUndoTx()
 	rehash := true
 	for rehash {
 		// need to lock and get kv pair in every transaction
@@ -315,7 +315,7 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 				d.rehashStep(tx)
 			}
 		}
-		tx.Commit()
+		tx.End()
 	}
 	transaction.Release(tx)
 }

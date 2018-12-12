@@ -2,7 +2,7 @@ package redis
 
 import (
 	"bytes"
-	"pmem/transaction"
+	"go-pmem-transaction/transaction"
 )
 
 type (

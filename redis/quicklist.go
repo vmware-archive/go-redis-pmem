@@ -2,7 +2,7 @@ package redis
 
 import (
 	"fmt"
-	"pmem/transaction"
+	"go-pmem-transaction/transaction"
 )
 
 type (
