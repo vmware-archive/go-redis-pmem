@@ -31,15 +31,23 @@ func setCommand(c *client) {
 		if i < c.argc-1 {
 			next = c.argv[i+1]
 		}
-		if (curr[0] == 'n' || curr[0] == 'N') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_XX) == 0 {
+		if (curr[0] == 'n' || curr[0] == 'N') &&
+			(curr[1] == 'x' || curr[1] == 'X') &&
+			len(curr) == 2 && (flags&OBJ_SET_XX) == 0 {
 			flags |= OBJ_SET_NX
-		} else if (curr[0] == 'x' || curr[0] == 'X') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_NX) == 0 {
+		} else if (curr[0] == 'x' || curr[0] == 'X') &&
+			(curr[1] == 'x' || curr[1] == 'X') &&
+			len(curr) == 2 && (flags&OBJ_SET_NX) == 0 {
 			flags |= OBJ_SET_XX
-		} else if (curr[0] == 'e' || curr[0] == 'E') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_PX) == 0 {
+		} else if (curr[0] == 'e' || curr[0] == 'E') &&
+			(curr[1] == 'x' || curr[1] == 'X') &&
+			len(curr) == 2 && (flags&OBJ_SET_PX) == 0 {
 			flags |= OBJ_SET_EX
 			expire = next
 			i++
-		} else if (curr[0] == 'p' || curr[0] == 'P') && (curr[1] == 'x' || curr[1] == 'X') && len(curr) == 2 && (flags&OBJ_SET_EX) == 0 {
+		} else if (curr[0] == 'p' || curr[0] == 'P') &&
+			(curr[1] == 'x' || curr[1] == 'X') &&
+			len(curr) == 2 && (flags&OBJ_SET_EX) == 0 {
 			flags |= OBJ_SET_PX
 			ms = true
 			expire = next
@@ -83,7 +91,8 @@ func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, o
 	}
 
 	c.db.lockKeyWrite(c.tx, key)
-	if ((flags&OBJ_SET_NX) > 0 && c.db.lookupKeyWrite(c.tx, key) != nil) || ((flags&OBJ_SET_XX) > 0 && c.db.lookupKeyWrite(c.tx, key) == nil) {
+	if ((flags&OBJ_SET_NX) > 0 && c.db.lookupKeyWrite(c.tx, key) != nil) ||
+		((flags&OBJ_SET_XX) > 0 && c.db.lookupKeyWrite(c.tx, key) == nil) {
 		if abortReply != nil {
 			c.addReply(abortReply)
 		} else {
@@ -263,11 +272,11 @@ func appendCommand(c *client) {
 		return
 	}
 	if v == nil {
-		/* Create the key */
+		// Create the key
 		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 		totlen = len(c.argv[2])
 	} else {
-		/* Append the value */
+		// Append the value
 		totlen = len(v) + len(c.argv[2])
 		if !checkStringLength(c, totlen) {
 			return
@@ -280,7 +289,8 @@ func appendCommand(c *client) {
 
 func strlenCommand(c *client) {
 	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero, shared.wrongtypeerr); v != nil {
+		if v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]),
+			shared.czero, shared.wrongtypeerr); v != nil {
 			c.addReplyLongLong(int64(len(v)))
 		}
 	} else { // expired
@@ -327,7 +337,8 @@ func incrDecrCommand(c *client, incr int64) {
 
 		v += incr
 
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v) //TODO: use shared integers?
+		// TODO: use shared integers?
+		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
 		c.addReplyLongLong(v)
 	}
 }

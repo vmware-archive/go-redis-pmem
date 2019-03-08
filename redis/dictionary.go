@@ -70,7 +70,7 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	tx.Begin()
 	tx.Log(d)
 	d.initSize = nextPower(1, initSize)
-	// TODO: add -1 value to indicate ALWAYS set bucketPerShard equal to dict size.
+	// TODO: add -1 value to indicate ALWAYS set bucketPerShard to dict size.
 	if bucketPerShard >= initSize || bucketPerShard <= 0 {
 		d.bucketPerShard = d.initSize
 	} else if bucketPerShard > 0 {
@@ -213,7 +213,8 @@ func (d *dict) Cron(sleep time.Duration) {
 			tx.WLock(d.lock)
 			used, size0, size1 = d.resizeIfNeeded(tx)
 			if size1 > 0 {
-				fmt.Println("Dictionary used / size:", used, "/", size0, " ,Resize table to: ", size1)
+				fmt.Println("Dictionary used / size:", used, "/", size0,
+					" ,Resize table to: ", size1)
 			}
 		} else if d.rehashIdx == -2 {
 			tx.WLock(d.lock)
@@ -327,7 +328,8 @@ func (d *dict) lockKeys(tx transaction.TX, keys [][]byte, stride int) {
 		for i, _ := range shards {
 			shards[i] = d.findShard(t, keys[i*stride])
 		}
-		// make sure locks are acquired in the same order (ascending table and bucket id) to prevent deadlock!
+		// make sure locks are acquired in the same order (ascending table and
+		// bucket id) to prevent deadlock!
 		sort.Ints(shards)
 		prev := -1
 		for _, s := range shards {
@@ -360,7 +362,8 @@ func (d *dict) findShard(t int, key []byte) int {
 }
 
 func (d *dict) lockShard(tx transaction.TX, t, s int) {
-	// ReadOnly commands will aquire readOnly tx and read locks, otherwise WLock is aquired.
+	// ReadOnly commands will aquire readOnly tx and read locks, otherwise
+	// WLock is aquired.
 	tx.Lock(&d.tab[t].bucketlock[s])
 }
 
@@ -392,7 +395,8 @@ func (d *dict) find(key []byte) (int, int, *entry, *entry) {
 	return maxt, b, pre, curr
 }
 
-// key/value should be in pmem area, and appropriate locks should be already aquired at command level.
+// key/value should be in pmem area, and appropriate locks should be already
+// aquired at command level.
 func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert bool) {
 	t, b, _, e := d.find(key)
 
@@ -464,7 +468,7 @@ func (d *dict) randomKey() *entry {
 		return nil
 	}
 
-	/* search from possible buckets */
+	// search from possible buckets
 	var e *entry = nil
 	if d.rehashIdx >= 0 { // rehashing
 		for e == nil {
@@ -487,7 +491,7 @@ func (d *dict) randomKey() *entry {
 		}
 	}
 
-	/* found a non empty bucket, search a random one from the entry list */
+	// found a non empty bucket, search a random one from the entry list
 	ll := 0
 	ee := e
 	for ee != nil {

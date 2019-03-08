@@ -194,7 +194,7 @@ func TestQuicklistBasic(t *testing.T) {
 		ql.PushTail(tx, []byte("foo"))
 		ql.PushTail(tx, []byte("zoo"))
 
-		/* insert "bar" before "bob" while iterating over list. */
+		// insert "bar" before "bob" while iterating over list.
 		iter = ql.GetIterator(true)
 		for iter.Next(&entry) {
 			if bytes.Equal(entry.value.([]byte), []byte("bob")) {
@@ -473,22 +473,26 @@ func (ql *quicklist) verify(length, count, headcount, tailcount int) bool {
 	}
 
 	if count != ql.iterCount(true) {
-		fmt.Println("quicklist count wrong! expected", count, "get from forward iterating", ql.iterCount(true))
+		fmt.Println("quicklist count wrong! expected", count,
+			"get from forward iterating", ql.iterCount(true))
 		match = false
 	}
 
 	if count != ql.iterCount(false) {
-		fmt.Println("quicklist count wrong! expected", count, "get from backward iterating", ql.iterCount(false))
+		fmt.Println("quicklist count wrong! expected", count,
+			"get from backward iterating", ql.iterCount(false))
 		match = false
 	}
 
 	if ql.head != nil && int(ql.head.zl.entries) != headcount {
-		fmt.Println("quicklist headcount wrong! expected", headcount, "get", ql.head.zl.entries)
+		fmt.Println("quicklist headcount wrong! expected", headcount,
+			"get", ql.head.zl.entries)
 		match = false
 	}
 
 	if ql.tail != nil && int(ql.tail.zl.entries) != tailcount {
-		fmt.Println("quicklist tailcount wrong! expected", tailcount, "get", ql.tail.zl.entries)
+		fmt.Println("quicklist tailcount wrong! expected", tailcount,
+			"get", ql.tail.zl.entries)
 		match = false
 	}
 

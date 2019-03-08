@@ -375,7 +375,7 @@ func (ql *quicklist) insertNodeAfter(tx transaction.TX, oldNode, newNode *quickl
 	ql.insertNode(tx, oldNode, newNode, true)
 }
 
-/* ql should be logged outside this call. */
+// ql should be logged outside this call.
 func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNode, after bool) {
 	tx.Log(newNode)
 	if after {
@@ -526,11 +526,11 @@ func (node *quicklistNode) allowInsert(fill int, val interface{}) bool {
 
 func (node *quicklistNode) split(tx transaction.TX, offset int, after bool) *quicklistNode {
 	newNode := quicklistCreateNode(tx)
-	/* copy the whole zl into new node */
+	// copy the whole zl into new node
 	tx.Log(newNode)
 	newNode.zl = node.zl.deepCopy(tx)
 
-	/* remove dup entries in two nodes */
+	// remove dup entries in two nodes
 	if after {
 		node.zl.DeleteRange(tx, offset+1, node.zl.entries)
 		newNode.zl.DeleteRange(tx, 0, uint(offset)+1)
@@ -541,7 +541,7 @@ func (node *quicklistNode) split(tx transaction.TX, offset int, after bool) *qui
 	return newNode
 }
 
-/* ql should be logged outside the call. */
+// ql should be logged outside the call.
 func (ql *quicklist) mergeNodes(tx transaction.TX, center *quicklistNode) {
 	fill := ql.fill
 	var prev, prevPrev, next, nextNext, target *quicklistNode
@@ -594,7 +594,7 @@ func (ql *quicklist) allowNodeMerge(a, b *quicklistNode, fill int) bool {
 	}
 }
 
-/* ql should be logged outside the call. */
+// ql should be logged outside the call.
 func (ql *quicklist) ziplistMerge(tx transaction.TX, a, b *quicklistNode) *quicklistNode {
 	a.zl.Merge(tx, b.zl)
 	tx.Log(b.zl)
@@ -619,7 +619,7 @@ func nodeSizeMeetOptimizationRequirement(sz, fill int) bool {
 	}
 }
 
-/* ql should be logged outside the call. */
+// ql should be logged outside the call.
 func (ql *quicklist) delIndex(tx transaction.TX, node *quicklistNode, pos int) bool {
 	tx.Log(node)
 	deleteNode := false
@@ -632,7 +632,7 @@ func (ql *quicklist) delIndex(tx transaction.TX, node *quicklistNode, pos int) b
 	return deleteNode
 }
 
-/* ql should be logged outside this call. */
+// ql should be logged outside this call.
 func (ql *quicklist) delNode(tx transaction.TX, node *quicklistNode) {
 	if node.next != nil {
 		tx.Log(node.next)

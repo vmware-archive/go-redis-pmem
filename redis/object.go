@@ -243,22 +243,27 @@ func (c *client) getSetZsetOrReply(i interface{}, emptymsg []byte) (interface{},
 	}
 }
 
-// slice and interface are passed by value, so the returned slice/interface maybe actually in volatile memory, and only the underlying data is in pmem.
+// slice and interface are passed by value, so the returned slice/interface
+// maybe actually in volatile memory, and only the underlying data is in pmem.
 func shadowCopyToPmem(v []byte) []byte {
-	pv := pmake([]byte, len(v)) // here pv is actually in volatile memory, but it's pointing to in pmem array.
+	// here pv is actually in volatile memory, but it's pointing to in pmem array.
+	pv := pmake([]byte, len(v))
 	if len(v) > 0 {
 		copy(pv, v)
-		runtime.FlushRange(unsafe.Pointer(&pv[0]), uintptr(len(pv))) // shadow update needs to be flushed
+		// shadow update needs to be flushed
+		runtime.FlushRange(unsafe.Pointer(&pv[0]), uintptr(len(pv)))
 	}
 	return pv
 }
 
 func shadowCopyToPmemI(v []byte) interface{} {
-	pv := pnew([]byte) // a work around to solve the pass by value problem of slice
+	// a work around to solve the pass by value problem of slice
+	pv := pnew([]byte)
 	*pv = pmake([]byte, len(v))
 	if len(v) > 0 {
 		copy(*pv, v)
-		runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv))) // shadow update needs to be flushed
+		// shadow update needs to be flushed
+		runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv)))
 	}
 	return pv // make sure interface is pointing to a in pmem slice header
 }
@@ -270,6 +275,8 @@ func shadowConcatToPmemI(v1, v2 []byte, offset, total int) interface{} {
 	*pv = pmake([]byte, total)
 	copy(*pv, v1)
 	copy((*pv)[offset:], v2)
-	runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv))) // shadow update needs to be flushed
-	return pv                                                        // make sure interface is pointing to a in pmem slice header
+	// shadow update needs to be flushed
+	runtime.FlushRange(unsafe.Pointer(&(*pv)[0]), uintptr(len(*pv)))
+	// make sure interface is pointing to a in pmem slice header
+	return pv
 }

@@ -5,9 +5,11 @@
 
 package redis
 
-/* Currently, write lock of the hash value will be acquired for all write hash commands (since we donot know wheter the command updates inner hash fields only or will also update the outter hash value).
- * Therefore, there is no extra lock required for field access within the hash value.
- * However, the outter lock also prevents concurrent writes or read/write into the same hash value. */
+// Currently, write lock of the hash value will be acquired for all write hash
+// commands (since we do not know whether the command updates inner hash fields
+// only or will also update the outter hash value). Therefore, there is no extra
+// lock required for field access within the hash value. However, the outter
+// lock also prevents concurrent writes or read/write into the same hash value.
 
 import (
 	"math"
@@ -23,7 +25,7 @@ type hashTypeIterator struct {
 	de      *entry
 }
 
-/*============== hash type commands ====================*/
+// ============== hash type commands ====================
 
 func hsetnxCommand(c *client) {
 	c.db.lockKeyWrite(c.tx, c.argv[1])
@@ -192,7 +194,8 @@ func hincrbyCommand(c *client) {
 		c.db.lockKeyWrite(c.tx, c.argv[1])
 		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 
-		if v, ok := c.getLongLongOrReply(hashTypeGetValue(o, c.argv[2]), []byte("-ERR hash value is not an integer\r\n")); ok {
+		if v, ok := c.getLongLongOrReply(hashTypeGetValue(o, c.argv[2]),
+			[]byte("-ERR hash value is not an integer\r\n")); ok {
 			if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
 				(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
 				c.addReplyError([]byte("increment or decrement would overflow"))
@@ -210,7 +213,8 @@ func hincrbyfloatCommand(c *client) {
 		c.db.lockKeyWrite(c.tx, c.argv[1])
 		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 
-		if v, ok := c.getLongDoubleOrReply(hashTypeGetValue(o, c.argv[2]), []byte("-ERR hash value is not a float\r\n")); ok {
+		if v, ok := c.getLongDoubleOrReply(hashTypeGetValue(o, c.argv[2]),
+			[]byte("-ERR hash value is not a float\r\n")); ok {
 			v += incr
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				c.addReplyError([]byte("increment would produce NaN or Infinity"))
@@ -222,7 +226,7 @@ func hincrbyfloatCommand(c *client) {
 	}
 }
 
-/*============== helper functions ====================*/
+// ============== helper functions ====================
 
 func hashTypeLookupWriteOrCreate(c *client, key []byte) interface{} {
 	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, key), nil)

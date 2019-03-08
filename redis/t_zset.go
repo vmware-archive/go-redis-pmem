@@ -70,19 +70,19 @@ type (
 )
 
 const (
-	/* Input flags. */
+	// Input flags.
 	ZADD_NONE = 0
 	ZADD_INCR = (1 << 0)
 	ZADD_NX   = (1 << 1)
 	ZADD_XX   = (1 << 2)
 
-	/* Output flags. */
+	// Output flags.
 	ZADD_NOP     = (1 << 3)
 	ZADD_NAN     = (1 << 4)
 	ZADD_ADDED   = (1 << 5)
 	ZADD_UPDATED = (1 << 6)
 
-	/* Flags only used by the ZADD command but not by zsetAdd() API: */
+	// Flags only used by the ZADD command but not by zsetAdd() API:
 	ZADD_CH = (1 << 16)
 
 	ZRANGE_RANK  = 0
@@ -137,7 +137,7 @@ func (zsl *zskiplist) swizzle(tx transaction.TX) {
 	}
 }
 
-/*============== zset type commands ====================*/
+// ============== zset type commands ====================
 func zaddCommand(c *client) {
 	zaddGenericCommand(c, ZADD_NONE)
 }
@@ -149,8 +149,8 @@ func zincrbyCommand(c *client) {
 func zaddGenericCommand(c *client, flags int) {
 	nanerr := []byte("resulting score is not a number (NaN)")
 
-	/* Parse options. At the end 'scoreidx' is set to the argument position
-	 * of the score of the first score-element pair. */
+	// Parse options. At the end 'scoreidx' is set to the argument position
+	// of the score of the first score-element pair.
 	scoreidx := 2
 	for scoreidx < c.argc {
 		opt := string(c.argv[scoreidx])
@@ -173,8 +173,8 @@ func zaddGenericCommand(c *client, flags int) {
 	xx := (flags & ZADD_XX) != 0
 	ch := (flags & ZADD_CH) != 0
 
-	/* After the options, we expect to have an even number of args, since
-	 * we expect any number of score-element pairs. */
+	// After the options, we expect to have an even number of args, since
+	// we expect any number of score-element pairs.
 	elements := c.argc - scoreidx
 	if elements%2 == 1 || elements == 0 {
 		c.addReply(shared.syntaxerr)
@@ -182,7 +182,7 @@ func zaddGenericCommand(c *client, flags int) {
 	}
 	elements /= 2
 
-	/* Check for incompatible options. */
+	// Check for incompatible options.
 	if nx && xx {
 		c.addReplyError([]byte("XX and NX options at the same time are not compatible"))
 		return
@@ -190,7 +190,8 @@ func zaddGenericCommand(c *client, flags int) {
 
 	if incr && elements > 1 {
 		//c.addReplyError([]byte("INCR option supports a single increment-element pair"))
-		c.addReplyError([]byte("wrong number of arguments")) // TODO: check arity for cmd before the command function
+		// TODO: check arity for cmd before the command function
+		c.addReplyError([]byte("wrong number of arguments"))
 		return
 	}
 
@@ -201,9 +202,9 @@ func zaddGenericCommand(c *client, flags int) {
 	var updated int64
 	processed := 0
 
-	/* Start parsing all the scores, we need to emit any syntax error
-	 * before executing additions to the sorted set, as the command should
-	 * either execute fully or nothing at all. */
+	// Start parsing all the scores, we need to emit any syntax error
+	// before executing additions to the sorted set, as the command should
+	// either execute fully or nothing at all.
 	scores := make([]float64, elements)
 	for j := 0; j < elements; j++ {
 		if scores[j], ok = c.getLongDoubleOrReply(c.argv[scoreidx+j*2], nil); !ok {
@@ -211,14 +212,14 @@ func zaddGenericCommand(c *client, flags int) {
 		}
 	}
 
-	/* Lookup the key and create the sorted set if does not exist. */
+	// Lookup the key and create the sorted set if does not exist.
 	c.db.lockKeyWrite(c.tx, c.argv[1])
 	zobj = c.db.lookupKeyWrite(c.tx, c.argv[1])
 	if zobj == nil {
 		if xx {
-			goto reply_to_client /* No key + XX option: nothing to do. */
+			goto reply_to_client // No key + XX option: nothing to do.
 		}
-		/* TODO: implement ziplist encoding. */
+		// TODO: implement ziplist encoding.
 		zobj = zsetCreate(c.tx)
 		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), zobj)
 	} else {
@@ -254,13 +255,13 @@ func zaddGenericCommand(c *client, flags int) {
 	// server.dirty += (added+updated)
 
 reply_to_client:
-	if incr { /* ZINCRBY or INCR option. */
+	if incr { // ZINCRBY or INCR option.
 		if processed > 0 {
 			c.addReplyDouble(score)
 		} else {
 			c.addReply(shared.nullbulk)
 		}
-	} else { /* ZADD. */
+	} else { // ZADD.
 		if ch {
 			c.addReplyLongLong(added + updated)
 		} else {
@@ -270,7 +271,7 @@ reply_to_client:
 
 cleanup:
 	if added > 0 || updated > 0 {
-		/* TODO: notify key space event */
+		// TODO: notify key space event
 	}
 }
 
@@ -325,7 +326,7 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 		key              []byte = c.argv[1]
 	)
 
-	/* Step 1: Parse the range. */
+	// Step 1: Parse the range.
 	if rangetype == ZRANGE_RANK {
 		if start, ok = c.getLongLongOrReply(c.argv[2], nil); !ok {
 			return
@@ -345,7 +346,7 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 		}
 	}
 
-	/* Step 2: Lookup & range sanity checks if needed. */
+	// Step 2: Lookup & range sanity checks if needed.
 	c.db.lockKeyWrite(c.tx, key)
 	zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(c.tx, key), shared.czero)
 	if !ok || zobj == nil {
@@ -353,7 +354,7 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 	}
 
 	if rangetype == ZRANGE_RANK {
-		/* Sanitize indexes. */
+		// Sanitize indexes.
 		llen = int64(zsetLength(zobj))
 		if start < 0 {
 			start = start + llen
@@ -365,8 +366,8 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 			start = 0
 		}
 
-		/* Invariant: start >= 0, so this test will be true when end < 0.
-		 * The range is empty when start > end or start >= length. */
+		// Invariant: start >= 0, so this test will be true when end < 0.
+		// The range is empty when start > end or start >= length.
 		if start > end || start >= llen {
 			c.addReply(shared.czero)
 			return
@@ -376,7 +377,7 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 		}
 	}
 
-	/* Step 3: Perform the range deletion operation. */
+	// Step 3: Perform the range deletion operation.
 	switch z := zobj.(type) {
 	case *zset:
 		if rangetype == ZRANGE_RANK {
@@ -396,7 +397,7 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 		panic("Unknown sorted set encoding")
 	}
 
-	/* Step 4: Notifications and reply. */
+	// Step 4: Notifications and reply.
 	if deleted > 0 {
 		if keyremoved {
 
@@ -441,7 +442,7 @@ func zrangeGenericCommand(c *client, reverse bool) {
 		return
 	}
 
-	/* Sanitize indexes. */
+	// Sanitize indexes.
 	llen := int64(zsetLength(zobj))
 	if start < 0 {
 		start = llen + start
@@ -469,7 +470,7 @@ func zrangeGenericCommand(c *client, reverse bool) {
 	switch z := zobj.(type) {
 	case *zset:
 		var ln *zskiplistNode
-		/* Check if starting point is trivial, before doing log(N) lookup. */
+		// Check if starting point is trivial, before doing log(N) lookup.
 		if reverse {
 			ln = z.zsl.tail
 			if start > 0 {
@@ -523,8 +524,8 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 		return
 	}
 
-	/* Parse optional extra arguments. Note that ZCOUNT will exactly have
-	 * 4 arguments, so we'll never enter the following code path. */
+	// Parse optional extra arguments. Note that ZCOUNT will exactly have
+	// 4 arguments, so we'll never enter the following code path.
 	var withscores bool
 	var limit int64 = -1
 	var offset int64 = 0
@@ -554,7 +555,7 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 		}
 	}
 
-	/* Ok, lookup the key and get the range */
+	// Ok, lookup the key and get the range
 	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
@@ -581,13 +582,13 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 			return
 		}
 
-		/* We don't know in advance how many matching elements there are in the
-		 * list, so we push this object that will represent the multi-bulk
-		 * length in the output buffer, and will "fix" it later */
+		// We don't know in advance how many matching elements there are in the
+		// list, so we push this object that will represent the multi-bulk
+		// length in the output buffer, and will "fix" it later
 		c.addDeferredMultiBulkLength()
 
-		/* If there is an offset, just traverse the number of elements without
-		 * checking the score because that is done in the next loop. */
+		// If there is an offset, just traverse the number of elements without
+		// checking the score because that is done in the next loop.
 		for ln != nil && offset != 0 {
 			if reverse {
 				ln = ln.backward
@@ -598,7 +599,7 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 		}
 
 		for ln != nil && limit != 0 {
-			/* Abort when the node is no longer in range. */
+			// Abort when the node is no longer in range.
 			if reverse {
 				if !zslValueGteMin(ln.score, &zrange) {
 					break
@@ -615,7 +616,7 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 				c.addReplyDouble(ln.score)
 			}
 
-			/* Move to next node */
+			// Move to next node
 			if reverse {
 				ln = ln.backward
 			} else {
@@ -636,14 +637,14 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 func zcountCommand(c *client) {
 	key := c.argv[1]
 
-	/* Parse the range arguments */
+	// Parse the range arguments
 	zrange, ok := zslParseRange(c.argv[2], c.argv[3])
 	if !ok {
 		c.addReplyError([]byte("min or max is not a float"))
 		return
 	}
 
-	/* Lookup the sorted set */
+	// Lookup the sorted set
 	if !c.db.lockKeyRead(c.tx, key) { // expired
 		c.addReply(shared.czero)
 		return
@@ -652,15 +653,15 @@ func zcountCommand(c *client) {
 	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
 		switch zs := zobj.(type) {
 		case *zset:
-			/* Find first element in range */
+			// Find first element in range
 			zn := zs.zsl.firstInRange(&zrange)
-			/* Use rank of first element, if any, to determine preliminary count */
+			// Use rank of first element, if any, to determine preliminary count
 			if zn != nil {
 				rank, _ := zs.zsl.getRank(zn.score, zn.ele)
 				count = zs.zsl.length - (rank - 1)
-				/* Find last element in range */
+				// Find last element in range
 				zn = zs.zsl.lastInRange(&zrange)
-				/* Use rank of last element, if any, to determine the actual count */
+				// Use rank of last element, if any, to determine the actual count
 				if zn != nil {
 					rank, _ := zs.zsl.getRank(zn.score, zn.ele)
 					count -= (zs.zsl.length - rank)
@@ -676,14 +677,14 @@ func zcountCommand(c *client) {
 func zlexcountCommand(c *client) {
 	key := c.argv[1]
 
-	/* Parse the range arguments */
+	// Parse the range arguments
 	zlexrange, ok := zslParseLexRange(c.argv[2], c.argv[3])
 	if !ok {
 		c.addReplyError([]byte("min or max not valid string range item"))
 		return
 	}
 
-	/* Lookup the sorted set */
+	// Lookup the sorted set
 	if !c.db.lockKeyRead(c.tx, key) { // expired
 		c.addReply(shared.czero)
 		return
@@ -692,17 +693,17 @@ func zlexcountCommand(c *client) {
 	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
 		switch zs := zobj.(type) {
 		case *zset:
-			/* Find first element in range */
+			// Find first element in range
 			zn := zs.zsl.firstInLexRange(&zlexrange)
-			/* Use rank of first element, if any, to determine preliminary count */
+			// Use rank of first element, if any, to determine preliminary count
 			if zn != nil {
 				rank, _ := zs.zsl.getRank(zn.score, zn.ele)
 				count = (zs.zsl.length - (rank - 1))
 
-				/* Find last element in range */
+				// Find last element in range
 				zn = zs.zsl.lastInLexRange(&zlexrange)
 
-				/* Use rank of last element, if any, to determine the actual count */
+				// Use rank of last element, if any, to determine the actual count
 				if zn != nil {
 					rank, _ = zs.zsl.getRank(zn.score, zn.ele)
 					count -= (zs.zsl.length - rank)
@@ -724,7 +725,7 @@ func zrevrangebylexCommand(c *client) {
 }
 
 func genericZrangebylexCommand(c *client, reverse bool) {
-	/* Parse the range arguments. */
+	// Parse the range arguments.
 	var minidx, maxidx int
 	if reverse {
 		maxidx = 2
@@ -739,8 +740,8 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 		return
 	}
 
-	/* Parse optional extra arguments. Note that ZCOUNT will exactly have
-	 * 4 arguments, so we'll never enter the following code path. */
+	// Parse optional extra arguments. Note that ZCOUNT will exactly have
+	// 4 arguments, so we'll never enter the following code path.
 	var limit int64 = -1
 	var offset int64 = 0
 	if c.argc > 4 {
@@ -765,7 +766,7 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 		}
 	}
 
-	/* Ok, lookup the key and get the range */
+	// Ok, lookup the key and get the range
 	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
@@ -792,13 +793,13 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 			return
 		}
 
-		/* We don't know in advance how many matching elements there are in the
-		 * list, so we push this object that will represent the multi-bulk
-		 * length in the output buffer, and will "fix" it later */
+		// We don't know in advance how many matching elements there are in the
+		// list, so we push this object that will represent the multi-bulk
+		// length in the output buffer, and will "fix" it later
 		c.addDeferredMultiBulkLength()
 
-		/* If there is an offset, just traverse the number of elements without
-		 * checking the score because that is done in the next loop. */
+		// If there is an offset, just traverse the number of elements without
+		// checking the score because that is done in the next loop.
 		for ln != nil && offset != 0 {
 			if reverse {
 				ln = ln.backward
@@ -809,7 +810,7 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 		}
 
 		for ln != nil && limit != 0 {
-			/* Abort when the node is no longer in range. */
+			// Abort when the node is no longer in range.
 			if reverse {
 				if !zslLexValueGteMin(ln.ele, &zlexrange) {
 					break
@@ -822,7 +823,7 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 			rangelen++
 			c.addReplyBulk(ln.ele)
 
-			/* Move to next node */
+			// Move to next node
 			if reverse {
 				ln = ln.backward
 			} else {
@@ -894,7 +895,7 @@ func zinterstoreCommand(c *client) {
 }
 
 func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
-	/* expect setnum input keys to be given */
+	// expect setnum input keys to be given
 	setnum := 0
 	if num, ok := c.getLongLongOrReply(c.argv[2], nil); !ok {
 		return
@@ -907,13 +908,15 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 		return
 	}
 
-	/* test if the expected number of keys would overflow */
+	// test if the expected number of keys would overflow
 	if setnum > c.argc-3 {
 		c.addReply(shared.syntaxerr)
 		return
 	}
-	/* Tricky here: lock dstkey and input keys in one lockKeysWrite call to avoid deadlock. */
-	// TODO: since this is write command, key locks aquired will automatically become wlock, which is actually not necessary here.
+	// Tricky here: lock dstkey and input keys in one lockKeysWrite call to
+	// avoid deadlock.
+	// TODO: since this is write command, key locks aquired will automatically
+	// become wlock, which is actually not necessary here.
 	keys := make([][]byte, setnum+1)
 	keys[0] = dstkey
 	copy(keys[1:], c.argv[3:])
@@ -925,11 +928,11 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 			return
 		} else {
 			src[i].subject = zobj
-			/* Default all weights to 1. */
+			// Default all weights to 1.
 			src[i].weight = 1.0
 		}
 	}
-	/* parse optional extra arguments */
+	// parse optional extra arguments
 	j := setnum + 3
 	remaining := c.argc - j
 	aggregate := REDIS_AGGR_SUM
@@ -939,7 +942,8 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 			remaining--
 			for i := 0; i < setnum; i, j, remaining = i+1, j+1, remaining-1 {
 				var ok bool
-				if src[i].weight, ok = c.getLongDoubleOrReply(c.argv[j], []byte("-ERR weight value is not a float\r\n")); !ok {
+				if src[i].weight, ok = c.getLongDoubleOrReply(c.argv[j],
+					[]byte("-ERR weight value is not a float\r\n")); !ok {
 					return
 				}
 			}
@@ -964,16 +968,16 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 		}
 	}
 
-	/* sort sets from the smallest to largest, this will improve our
-	 * algorithm's performance */
+	// sort sets from the smallest to largest, this will improve our
+	// algorithm's performance
 	sort.Sort(zsetops(src))
 	dstzset := zsetCreate(c.tx)
 	zval := new(zsetopval)
 	if op == SET_OP_INTER {
-		/* Skip everything if the smallest input is empty. */
+		// Skip everything if the smallest input is empty.
 		if src[0].zuiLength() > 0 {
-			/* Precondition: as src[0] is non-empty and the inputs are ordered
-			 * by size, all src[i > 0] are non-empty too. */
+			// Precondition: as src[0] is non-empty and the inputs are ordered
+			// by size, all src[i > 0] are non-empty too.
 			src[0].zuiInitIterator()
 			for src[0].zuiNext(zval) {
 				score := src[0].weight * zval.score
@@ -983,8 +987,8 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 
 				j := 0
 				for j = 1; j < setnum; j++ {
-					/* It is not safe to access the zset we are
-					 * iterating, so explicitly check for equal object. */
+					// It is not safe to access the zset we are
+					// iterating, so explicitly check for equal object.
 					if src[j].subject == src[0].subject {
 						value := zval.score * src[j].weight
 						score = zuinionInterAggregate(score, value, aggregate)
@@ -996,7 +1000,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 					}
 				}
 
-				/* Only continue when present in every input. */
+				// Only continue when present in every input.
 				if j == setnum {
 					tmp := zval.zuiNewSdsFromValue()
 					dstzset.zsl.insert(c.tx, score, tmp)
@@ -1006,20 +1010,20 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 		}
 	} else if op == SET_OP_UNION {
 		accumulator := NewDict(c.tx, int(src[setnum-1].zuiLength()), 1024)
-		/* Step 1: Create a dictionary of elements -> aggregated-scores
-		 * by iterating one sorted set after the other. */
+		// Step 1: Create a dictionary of elements -> aggregated-scores
+		// by iterating one sorted set after the other.
 		for i := 0; i < setnum; i++ {
 			if src[i].zuiLength() == 0 {
 				continue
 			}
 			src[i].zuiInitIterator()
 			for src[i].zuiNext(zval) {
-				/* Initialize value */
+				// Initialize value
 				score := src[i].weight * zval.score
 				if math.IsNaN(score) {
 					score = 0
 				}
-				/* Search for this element in the accumulating dictionary. */
+				// Search for this element in the accumulating dictionary.
 				_, _, _, de := accumulator.find(zval.ele)
 				if de == nil {
 					tmp := zval.zuiNewSdsFromValue()
@@ -1030,7 +1034,8 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 				}
 			}
 		}
-		/* Step 2: convert the dictionary into the final sorted set. Since we directly store score in zset dict, we can directly use it. */
+		// Step 2: convert the dictionary into the final sorted set. Since we
+		// directly store score in zset dict, we can directly use it.
 		di := accumulator.getIterator()
 		for de := di.next(); de != nil; de = di.next() {
 			dstzset.zsl.insert(c.tx, de.value.(float64), de.key)
@@ -1049,7 +1054,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 	}
 }
 
-/*============== common zset api ====================*/
+// ============== common zset api ====================
 func zsetCreate(tx transaction.TX) *zset {
 	zs := pnew(zset)
 	tx.Log(zs)
@@ -1064,7 +1069,7 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 	xx := (flags & ZADD_XX) != 0
 	flags = 0
 
-	/* NaN as input is an error regardless of all the other parameters. */
+	// NaN as input is an error regardless of all the other parameters.
 	if math.IsNaN(score) {
 		return 0, 0, flags
 	}
@@ -1073,13 +1078,13 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 	case *zset:
 		_, _, _, de := zs.dict.find(ele)
 		if de != nil {
-			/* NX? Return, same element already exists. */
+			// NX? Return, same element already exists.
 			if nx {
 				return 1, 0, flags | ZADD_NOP
 			}
 			curscore := de.value.(float64)
 
-			/* NX? Return, same element already exists. */
+			// NX? Return, same element already exists.
 			if incr {
 				score += curscore
 				if math.IsNaN(score) {
@@ -1087,12 +1092,14 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 				}
 			}
 
-			/* Remove and re-insert when score changes. */
+			// Remove and re-insert when score changes.
 			if score != curscore {
 				node := zs.zsl.delete(c.tx, curscore, ele)
 				zs.zsl.insert(c.tx, score, node.ele)
 				c.tx.Log(de)
-				de.value = score // Change dictionary value to directly store score value instead of pointer to score in zsl.
+				// Change dictionary value to directly store score value instead
+				// of pointer to score in zsl.
+				de.value = score
 				flags |= ZADD_UPDATED
 			}
 			return 1, score, flags
@@ -1177,7 +1184,7 @@ func zsetRank(zobj interface{}, ele []byte, reverse bool) (uint, bool) {
 	}
 }
 
-/*============== common skiplist api ====================*/
+// ============== common skiplist api ====================
 
 func zslCreate(tx transaction.TX) *zskiplist {
 	zsl := pnew(zskiplist)
@@ -1333,7 +1340,7 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 	rank := make([]uint, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
 	for i := zsl.level - 1; i >= 0; i-- {
-		/* store rank that is crossed to reach the insert position */
+		// store rank that is crossed to reach the insert position
 		if i == zsl.level-1 {
 			rank[i] = 0
 		} else {
@@ -1348,10 +1355,10 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 		}
 		update[i] = x
 	}
-	/* we assume the element is not already inside, since we allow duplicated
-	 * scores, reinserting the same element should never happen since the
-	 * caller of zslInsert() should test in the hash table if the element is
-	 * already inside or not. */
+	// we assume the element is not already inside, since we allow duplicated
+	// scores, reinserting the same element should never happen since the
+	// caller of zslInsert() should test in the hash table if the element is
+	// already inside or not.
 	tx.Log(zsl)
 	level := zslRandomLevel()
 	if level > zsl.level {
@@ -1371,12 +1378,12 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 		tx.Log(&update[i].level[i])
 		update[i].level[i].forward = x
 
-		/* update span covered by update[i] as x is inserted here */
+		// update span covered by update[i] as x is inserted here
 		x.level[i].span = update[i].level[i].span - (rank[0] - rank[i])
 		update[i].level[i].span = (rank[0] - rank[i]) + 1
 	}
 
-	/* increment span for untouched levels */
+	// increment span for untouched levels
 	for i := level; i < zsl.level; i++ {
 		update[i].level[i].span++
 	}
@@ -1531,7 +1538,7 @@ func (zsl *zskiplist) getRank(score float64, ele []byte) (uint, bool) {
 	return 0, false
 }
 
-/*============== Lexicographic ranges ====================*/
+// ============== Lexicographic ranges ====================
 
 func zslParseLexRange(min, max []byte) (spec zlexrangespec, ok bool) {
 	if spec.min, spec.minex, ok = zslParseLexRangeItem(min); !ok {
@@ -1627,7 +1634,7 @@ func (zsl *zskiplist) lastInLexRange(zrange *zlexrangespec) *zskiplistNode {
 }
 
 func (zsl *zskiplist) isInLexRange(zrange *zlexrangespec) bool {
-	/* Test for ranges that will always be empty. */
+	// Test for ranges that will always be empty.
 	if cmplex(zrange.min, zrange.max) > 1 ||
 		(bytes.Compare(zrange.min, zrange.max) == 0 && (zrange.minex || zrange.maxex)) {
 		return false
@@ -1643,7 +1650,7 @@ func (zsl *zskiplist) isInLexRange(zrange *zlexrangespec) bool {
 	return true
 }
 
-/*============== union inter helper functions ====================*/
+// ============== union inter helper functions ====================
 func (ops zsetops) Len() int {
 	return len(ops)
 }

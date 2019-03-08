@@ -33,30 +33,6 @@ func TestServer(t *testing.T) {
 	transaction.Release(undoTx)
 }
 
-/*
-func TestDict(t *testing.T) {
-	undoTx := setup()
-
-	for i:=0; i<1000; i++ {
-		d.Set(undoTx, strconv.Itoa(i),strconv.Itoa(i))
-	}
-	for i:=0; i<1000; i++ {
-		assertEqual(t, strconv.Itoa(i), d.Get(undoTx, strconv.Itoa(i)))
-	}
-	for i:=0; i<1000; i++ {
-		d.Set(undoTx, strconv.Itoa(i),strconv.Itoa(i+1))
-	}
-	for i:=0; i<1000; i++ {
-		assertEqual(t, strconv.Itoa(i+1), d.Get(undoTx, strconv.Itoa(i)))
-	}
-	for i:=0; i<1000; i++ {
-		d.Del(undoTx, strconv.Itoa(i))
-	}
-	for i:=0; i<1000; i++ {
-		assertEqual(t, "", d.Get(undoTx, strconv.Itoa(i)))
-	}
-}*/
-
 func setup() transaction.TX {
 	logSlice := make([]byte, transaction.LOGSIZE)
 	heapSlice := make([]byte, 100000000)

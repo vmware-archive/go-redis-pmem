@@ -51,7 +51,7 @@ func ziplistNew(tx transaction.TX) *ziplist {
 	return pnew(ziplist)
 }
 
-/* get val at given offset. */
+// get val at given offset
 func (zl *ziplist) Get(pos int) interface{} {
 	if pos >= len(zl.data) || pos < 0 {
 		return nil
@@ -66,7 +66,8 @@ func (zl *ziplist) Get(pos int) interface{} {
 	}
 }
 
-/* return offset to use for Get and Next. Traverse back to front if idx is negative. Return len(zl.data) if out of range. */
+// return offset to use for Get and Next. Traverse back to front if idx is
+// negative. Return len(zl.data) if out of range.
 func (zl *ziplist) Index(idx int) int {
 	pos := 0
 	if idx < 0 { // travel backward
@@ -93,7 +94,7 @@ func (zl *ziplist) Index(idx int) int {
 	}
 }
 
-/* compare entry at pos with given val. */
+// compare entry at pos with given val.
 func (zl *ziplist) Compare(pos int, val interface{}) bool {
 	s, ll, encoding := zipTryEncoding(val)
 	return zl.compare(pos, s, ll, encoding)
@@ -118,7 +119,8 @@ func (zl *ziplist) compare(pos int, s []byte, ll int64, encoding byte) bool {
 	}
 }
 
-/* find a given val in ziplist and return pos or -1, skip 'skip' entries between every comparison. */
+// find a given val in ziplist and return pos or -1, skip 'skip' entries between
+// every comparison.
 func (zl *ziplist) Find(val interface{}, skip uint) int {
 	skipcnt := uint(0)
 	s, ll, encoding := zipTryEncoding(val)
@@ -136,7 +138,7 @@ func (zl *ziplist) Find(val interface{}, skip uint) int {
 	return -1
 }
 
-/* return offset of next entry given current entry offset. */
+// return offset of next entry given current entry offset.
 func (zl *ziplist) Next(pos int) int {
 	if pos >= len(zl.data) || pos < 0 {
 		return -1
@@ -149,7 +151,7 @@ func (zl *ziplist) Next(pos int) int {
 	}
 }
 
-/* return offset of previous entry given current entry offset. */
+// return offset of previous entry given current entry offset.
 func (zl *ziplist) Prev(pos int) int {
 	if pos == 0 {
 		return -1
@@ -169,7 +171,7 @@ func (zl *ziplist) Len() int {
 	return len(zl.data)
 }
 
-/* push val to the tail of list. */
+// push val to the tail of list.
 func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
 	if head {
 		zl.insert(tx, 0, val)
@@ -178,12 +180,12 @@ func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
 	}
 }
 
-/* delete a single entry at pos */
+// delete a single entry at pos
 func (zl *ziplist) Delete(tx transaction.TX, pos int) {
 	zl.delete(tx, pos, 1)
 }
 
-/* delete range of entries from pos. */
+// delete range of entries from pos.
 func (zl *ziplist) DeleteRange(tx transaction.TX, idx int, num uint) {
 	pos := zl.Index(idx)
 	if pos >= 0 {
@@ -191,7 +193,7 @@ func (zl *ziplist) DeleteRange(tx transaction.TX, idx int, num uint) {
 	}
 }
 
-/* append zl2 to zl */
+// append zl2 to zl
 func (zl *ziplist) Merge(tx transaction.TX, zl2 *ziplist) {
 	if zl == zl2 {
 		return // do not allow merge self
@@ -274,12 +276,12 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 		zl.entries -= deleted
 		prevlensize, prevlen := zipEntryPrevlen(zl.data[pos:])
 		if end == -1 {
-			/* delete entire tails, directly cut slice in this case to save copying cost.
-			 * TODO: downside is that the cutted tail will not be garbage collected. */
+			// delete entire tails, directly cut slice in this case to save copying cost.
+			// TODO: downside is that the cutted tail will not be garbage collected.
 			zl.data = zl.data[:pos]
 			zl.zltail = pos - int(prevlen)
 		} else {
-			/* use prevlen of first deleted entry to replace the prevlen of the new next entry. */
+			// use prevlen of first deleted entry to replace the prevlen of the new next entry.
 			oldprevlensize, _ := zipEntryPrevlen(zl.data[end:])
 			if zl.zltail == end {
 				// need to consider the prevlen size diff if change the prevlen field of tail
@@ -315,7 +317,8 @@ func cascadeUpdate(data []byte, pos int) ([]byte, int) {
 		prevlensize, prevlen := zipEntryPrevlen(data[pos:])
 		if prevlen == currsize { // no size change
 			break
-		} else if currsize < uint32(ZIP_BIG_PREVLEN) || prevlensize == 5 { // enough space to hold currsize
+		} else if currsize < uint32(ZIP_BIG_PREVLEN) || prevlensize == 5 {
+			// enough space to hold currsize
 			if prevlensize == 1 {
 				data[pos] = uint8(currsize)
 			} else {
@@ -323,7 +326,8 @@ func cascadeUpdate(data []byte, pos int) ([]byte, int) {
 			}
 		} else { // need more room to hold currsize
 			// TODO: implement persistent append/realloc/memmove
-			if pos+int(zipEntrylen(data[pos:])) < len(data) { // next entry is not tail
+			if pos+int(zipEntrylen(data[pos:])) < len(data) {
+				// next entry is not tail
 				tailShift += 4
 			}
 			newdata := pmake([]byte, len(data)+4)
@@ -337,7 +341,7 @@ func cascadeUpdate(data []byte, pos int) ([]byte, int) {
 	return data, tailShift
 }
 
-/* get information of an entry and put into zlentry struct. */
+// get information of an entry and put into zlentry struct.
 func (ze *zlentry) set(entry []byte) {
 	ze.prevlensize, ze.prevlen = zipEntryPrevlen(entry)
 	ze.lensize, ze.dlen = zipEntryDatalen(entry[ze.prevlensize:])
@@ -346,7 +350,7 @@ func (ze *zlentry) set(entry []byte) {
 	ze.entry = entry
 }
 
-/* get size to hold prev len and prev entry len of entry at given position. */
+// get size to hold prev len and prev entry len of entry at given position.
 func (zl *ziplist) prevlen(pos int) (uint32, uint32) {
 	if len(zl.data) == 0 || pos == 0 { // insert to head or an empty list
 		return 1, 0
@@ -370,7 +374,7 @@ func zipEntryPrevlen(entry []byte) (uint32, uint32) {
 	}
 }
 
-/* len of an entry, including [prevlen, encoding, len, data] */
+// len of an entry, including [prevlen, encoding, len, data]
 func zipEntrylen(entry []byte) uint32 {
 	var prevlensize uint32
 	// Do not need to decode prelen in this case.
@@ -383,7 +387,7 @@ func zipEntrylen(entry []byte) uint32 {
 	return prevlensize + lensize + size
 }
 
-/* len of entry data, return size of (encoding+len) and size of (data) */
+// len of entry data, return size of (encoding+len) and size of (data)
 func zipEntryDatalen(entry []byte) (uint32, uint32) {
 	encoding := entry[0]
 	// fmt.Println("Get data len, encoding:", encoding)
@@ -425,7 +429,7 @@ func zipEntryDatalen(entry []byte) (uint32, uint32) {
 	return 0, 0
 }
 
-/* determine encoding of val by its type and length */
+// determine encoding of val by its type and length
 func zipTryEncoding(val interface{}) ([]byte, int64, byte) {
 	var value int64
 	switch v := val.(type) {
@@ -458,7 +462,7 @@ func zipTryEncoding(val interface{}) ([]byte, int64, byte) {
 	}
 }
 
-/* store [encoding, len] into entry */
+// store [encoding, len] into entry
 func zipStoreEntryEncoding(v []byte, encoding byte, size int) uint32 {
 	if (encoding & ZIP_STR_MASK) < ZIP_STR_MASK { // str encoding
 		if size <= 0x3f {
@@ -479,7 +483,7 @@ func zipStoreEntryEncoding(v []byte, encoding byte, size int) uint32 {
 	return 1
 }
 
-/* store interger data into entry. */
+// store interger data into entry.
 func zipSaveInteger(v []byte, ll int64, encoding byte) uint32 {
 	if encoding == ZIP_INT_8B {
 		v[0] = byte(ll)
@@ -500,7 +504,7 @@ func zipSaveInteger(v []byte, ll int64, encoding byte) uint32 {
 	}
 }
 
-/* load interger data from entry. */
+// load interger data from entry.
 func zipLoadInteger(v []byte, encoding byte) int64 {
 	var ret int64
 	if encoding == ZIP_INT_8B {

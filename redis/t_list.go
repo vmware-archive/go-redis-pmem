@@ -24,7 +24,7 @@ type (
 	}
 )
 
-/*============== list type commands ====================*/
+// ============== list type commands ====================
 func pushGenericCommand(c *client, head bool) {
 	pushed := 0
 	c.db.lockKeyWrite(c.tx, c.argv[1])
@@ -211,7 +211,7 @@ func lrangeCommand(c *client) {
 	}
 	llen := listTypeLength(o)
 
-	/* convert negative indexes */
+	// convert negative indexes
 	if start < 0 {
 		start += llen
 	}
@@ -262,7 +262,7 @@ func ltrimCommand(c *client) {
 	}
 	llen := listTypeLength(o)
 
-	/* convert negative indexes */
+	// convert negative indexes
 	if start < 0 {
 		start += llen
 	}
@@ -351,7 +351,7 @@ func rpoplpushCommand(c *client) {
 	}
 }
 
-/*============== helper functions ====================*/
+// ============== helper functions ====================
 func listTypePush(tx transaction.TX, o, val interface{}, head bool) {
 	switch l := o.(type) {
 	case *quicklist:

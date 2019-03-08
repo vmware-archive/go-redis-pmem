@@ -11,12 +11,11 @@ import (
 	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
-/* General db locking order:
- * expire -> dict
- * rehash Lock -> table Lock -> bucket Lock
- * table0 -> table1
- * bucket id ascending
- */
+// General db locking order:
+// expire -> dict
+// rehash Lock -> table Lock -> bucket Lock
+// table0 -> table1
+// bucket id ascending
 
 var expired chan []byte = make(chan []byte, 100)
 
@@ -50,7 +49,9 @@ func (db *redisDb) expireCron(sleep time.Duration) {
 					db.dict.lockKey(tx, e.key)
 					db.delete(tx, e.key)
 					e = e.next
-					break // only delete one expire key in each transaction to prevent deadlock.
+					// only delete one expire key in each transaction to prevent
+					// deadlock.
+					break
 				}
 				e = e.next
 			}
@@ -189,9 +190,8 @@ func (db *redisDb) lookupKey(key []byte) interface{} {
 	_, _, _, e := db.dict.find(key)
 	if e != nil {
 		return e.value
-	} else {
-		return nil
 	}
+	return nil
 }
 
 func (db *redisDb) randomKey() *entry {
@@ -248,13 +248,16 @@ func expireGeneric(c *client, base time.Time, d time.Duration) {
 		return
 	}
 
-	// TODO: Expire with negative ttl or with timestamp into the past should never executed as a DEL when load AOF or in the context of a slave.
+	// TODO: Expire with negative ttl or with timestamp into the past should
+	// never executed as a DEL when load AOF or in the context of a slave.
 	if expire.Before(time.Now()) {
 		c.db.delete(c.tx, c.argv[1])
 		c.addReply(shared.cone)
 		return
 	} else {
-		c.db.setExpire(c.tx, c.argv[1], expire.UnixNano()) // int64 value should be inlined in interface, therefore should also be persisted after set.
+		// int64 value should be inlined in interface, therefore should also be
+		// persisted after set.
+		c.db.setExpire(c.tx, c.argv[1], expire.UnixNano())
 		c.addReply(shared.cone)
 		return
 	}
