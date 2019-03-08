@@ -1,8 +1,9 @@
 package redis
 
 import (
-	"go-pmem-transaction/transaction"
 	"sort"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (

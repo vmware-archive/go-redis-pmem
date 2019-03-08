@@ -3,14 +3,14 @@ package redis
 import (
 	"bytes"
 	"fmt"
-	"go-pmem-transaction/transaction"
-	_ "net/http/pprof"
 	"pmem/heap"
 	"reflect"
 	"runtime/debug"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 var d *dict

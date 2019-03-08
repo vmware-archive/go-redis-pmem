@@ -1,10 +1,9 @@
 package redis
 
 import (
-	_ "fmt"
-	"go-pmem-transaction/transaction"
-	_ "strconv"
 	"time"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 /* General db locking order:

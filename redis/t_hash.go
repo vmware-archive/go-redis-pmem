@@ -5,10 +5,11 @@ package redis
  * However, the outter lock also prevents concurrent writes or read/write into the same hash value. */
 
 import (
-	"go-pmem-transaction/transaction"
 	"math"
 	"math/rand"
 	"strconv"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type hashTypeIterator struct {

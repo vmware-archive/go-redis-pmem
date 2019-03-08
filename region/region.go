@@ -1,10 +1,11 @@
 package region
 
 import (
-	"go-pmem-transaction/transaction"
 	"log"
 	"runtime"
 	"unsafe"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 const (
@@ -27,26 +28,22 @@ type pmemHeader struct {
 var _region *pmemHeader
 
 // Initialize the persistent memory header metadata
-func Init(size int) unsafe.Pointer {
+func Init() unsafe.Pointer {
 	_region = pnew(pmemHeader)
 	_region.magic = MAGIC
-	_region.size = size
 	_region.gcPtr = transaction.Init(nil, "undo")
 	runtime.PersistRange(unsafe.Pointer(_region), unsafe.Sizeof(*_region))
 	return unsafe.Pointer(_region)
 }
 
 // Re-initialize the persistent memory header metadata
-func ReInit(regionPtr unsafe.Pointer, size int) {
+func ReInit(regionPtr unsafe.Pointer) {
 	_region = (*pmemHeader)(regionPtr)
 	if _region.magic != MAGIC {
 		log.Fatal("Region magic does not match!")
 	}
 	if _region.gcPtr == nil {
 		log.Fatal("gcPtr is nil")
-	}
-	if _region.size != size {
-		log.Fatal("Region size does not match!")
 	}
 	_region.gcPtr = transaction.Init(_region.gcPtr, "undo")
 }

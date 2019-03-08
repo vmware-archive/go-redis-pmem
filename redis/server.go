@@ -3,17 +3,16 @@ package redis
 import (
 	"bufio"
 	"fmt"
-	"go-pmem-transaction/transaction"
 	"log"
 	"net"
 	"os"
 	"pmem/region"
 	"runtime"
-	_ "runtime/debug"
 	"strconv"
 	"strings"
-	_ "time"
 	"unsafe"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (
@@ -63,9 +62,7 @@ type (
 
 const (
 	DATABASE string = "./database"
-	DATASIZE int    = 640 * 1024 * 1024 // 500M (must be mulitply of 64M)
 	PORT     string = ":6379"
-	OFFSET   int    = 0
 
 	CMD_WRITE    int = 1 << 0
 	CMD_READONLY int = 1 << 1
@@ -201,14 +198,14 @@ func (s *server) Start() {
 }
 
 func (s *server) init(path string) {
-	rootPtr, err := runtime.PmemInit(path, DATASIZE, OFFSET)
+	rootPtr, err := runtime.PmemInit(path)
 	if err != nil {
 		log.Fatal("Persistent memory initialization failed")
 	}
 	if rootPtr == nil { // indicates a first time initialization
 		// Initialize application specific metadata which will be set as the
 		// application root pointer.
-		regionRoot := region.Init(DATASIZE)
+		regionRoot := region.Init()
 		db := pnew(redisDb)
 		tx := transaction.NewUndoTx()
 		tx.Begin()
@@ -227,13 +224,12 @@ func (s *server) init(path string) {
 		// pointer, these updates will be lost in the next run of the application.
 		runtime.SetRoot(regionRoot)
 	} else {
-		region.ReInit(rootPtr, DATASIZE)
+		region.ReInit(rootPtr)
 		s.db = (*redisDb)(region.GetDbRoot())
 		tx := transaction.NewUndoTx()
 		tx.Exec(s.db.swizzle)
 		transaction.Release(tx)
 	}
-	runtime.EnableGC(100)
 	s.populateCommandTable()
 	createSharedObjects()
 }
@@ -424,13 +420,7 @@ func (c *client) processCommand() {
 		c.notSupported()
 	} else {
 		// c.printCommand()
-		if c.cmd.flag&CMD_READONLY > 0 {
-			c.tx = transaction.NewUndoTx()
-		} else if c.cmd.flag&CMD_LARGE > 0 { // TODO: check large command by argument number?
-			c.tx = transaction.NewLargeUndoTx()
-		} else {
-			c.tx = transaction.NewUndoTx()
-		}
+		c.tx = transaction.NewUndoTx()
 		c.tx.Begin()
 		c.cmd.proc(c)
 		c.tx.End()

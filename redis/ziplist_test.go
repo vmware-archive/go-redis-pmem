@@ -2,11 +2,12 @@ package redis
 
 import (
 	"fmt"
-	"go-pmem-transaction/transaction"
 	"os"
 	"pmem/region"
 	"runtime"
 	"testing"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 func TestZiplistBasic(t *testing.T) {

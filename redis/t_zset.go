@@ -2,12 +2,13 @@ package redis
 
 import (
 	"bytes"
-	"go-pmem-transaction/transaction"
 	"math"
 	"math/rand"
 	"sort"
 	"strings"
 	"unsafe"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (

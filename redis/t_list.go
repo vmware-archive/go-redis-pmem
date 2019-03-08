@@ -2,7 +2,8 @@ package redis
 
 import (
 	"bytes"
-	"go-pmem-transaction/transaction"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (

@@ -3,12 +3,13 @@ package redis
 import (
 	"bytes"
 	"fmt"
-	"go-pmem-transaction/transaction"
 	"os"
 	"pmem/region"
 	"runtime"
 	"strconv"
 	"testing"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 func TestQuicklistBasic(t *testing.T) {

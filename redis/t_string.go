@@ -1,7 +1,6 @@
 package redis
 
 import (
-	_ "fmt"
 	"math"
 	"strconv"
 	"time"

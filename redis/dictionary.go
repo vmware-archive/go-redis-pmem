@@ -3,7 +3,6 @@ package redis
 import (
 	"bytes"
 	"fmt"
-	"go-pmem-transaction/transaction"
 	"hash"
 	"hash/fnv"
 	"math"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 const (
