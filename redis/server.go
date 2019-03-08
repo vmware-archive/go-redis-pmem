@@ -8,15 +8,12 @@ package redis
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"os"
-	"pmem/region"
-	"runtime"
 	"strconv"
 	"strings"
-	"unsafe"
 
+	"github.com/vmware/go-pmem-transaction/pmem"
 	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
@@ -29,6 +26,7 @@ type (
 	redisDb struct {
 		dict   *dict
 		expire *dict
+		magic  int
 	}
 
 	redisCommand struct {
@@ -66,8 +64,9 @@ type (
 )
 
 const (
-	DATABASE string = "/mnt/ext4-pmem0/database"
+	DATABASE string = "./database"
 	PORT     string = ":6379"
+	MAGIC    int    = 0x3F4F357F7C9824B3
 
 	CMD_WRITE    int = 1 << 0
 	CMD_READONLY int = 1 << 1
@@ -202,35 +201,34 @@ func (s *server) Start() {
 	}
 }
 
-func (s *server) init(path string) {
-	rootPtr, err := runtime.PmemInit(path)
-	if err != nil {
-		log.Fatal("Persistent memory initialization failed")
-	}
-	if rootPtr == nil { // indicates a first time initialization
-		// Initialize application specific metadata which will be set as the
-		// application root pointer.
-		regionRoot := region.Init()
-		db := pnew(redisDb)
-		tx := transaction.NewUndoTx()
-		tx.Begin()
-		tx.Log(db)
-		db.dict = NewDict(tx, 1024, 32)
-		db.expire = NewDict(tx, 128, 1)
-		tx.End()
-		transaction.Release(tx)
-		s.db = db
-		// Set the database pointer in the region header.
-		region.SetDbRoot(unsafe.Pointer(db))
+func populateDb(db *redisDb) {
+	tx := transaction.NewUndoTx()
+	tx.Begin()
+	tx.Log(db)
+	db.dict = NewDict(tx, 1024, 32)
+	db.expire = NewDict(tx, 128, 1)
+	db.magic = MAGIC
+	tx.End()
+	transaction.Release(tx)
+}
 
-		// SetRoot() sets the region root pointer as the application root pointer.
-		// Any updates to persistent memory until this point can be done without
-		// transactional logging because without setting the application root
-		// pointer, these updates will be lost in the next run of the application.
-		runtime.SetRoot(regionRoot)
+func (s *server) init(path string) {
+	firstInit := pmem.Init(path)
+
+	if firstInit { // indicates a first time initialization
+		var dbr *redisDb
+		db := (*redisDb)(pmem.New("dbRoot", dbr))
+		populateDb(db)
+		s.db = db
 	} else {
-		region.ReInit(rootPtr)
-		s.db = (*redisDb)(region.GetDbRoot())
+		var dbr *redisDb
+		db := (*redisDb)(pmem.Get("dbRoot", dbr))
+		if db.magic != MAGIC {
+			// Previous initialization did not complete successfully. Re-populate
+			// data members in db.
+			populateDb(db)
+		}
+		s.db = db
 		tx := transaction.NewUndoTx()
 		tx.Exec(s.db.swizzle)
 		transaction.Release(tx)
