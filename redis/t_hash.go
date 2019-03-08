@@ -1,3 +1,8 @@
+///////////////////////////////////////////////////////////////////////
+// Copyright 2018-2019 VMware, Inc.
+// SPDX-License-Identifier: BSD-2-Clause
+///////////////////////////////////////////////////////////////////////
+
 package redis
 
 /* Currently, write lock of the hash value will be acquired for all write hash commands (since we donot know wheter the command updates inner hash fields only or will also update the outter hash value).

@@ -1,3 +1,8 @@
+///////////////////////////////////////////////////////////////////////
+// Copyright 2018-2019 VMware, Inc.
+// SPDX-License-Identifier: BSD-2-Clause
+///////////////////////////////////////////////////////////////////////
+
 package redis
 
 import (
@@ -61,7 +66,7 @@ type (
 )
 
 const (
-	DATABASE string = "./database"
+	DATABASE string = "/mnt/ext4-pmem0/database"
 	PORT     string = ":6379"
 
 	CMD_WRITE    int = 1 << 0
