@@ -8,7 +8,7 @@ limited subset of Redis commands are currently supported.
 
 ### Prerequisites
 
-To use these packages, you need new extensions to the Go language. These changes
+To use this package, you need new extensions to the Go language. These changes
 are maintained in a separate repository [here](https://github.com/jerrinsg/go-pmem).
 
 ### Build & Run
@@ -36,6 +36,13 @@ This implementation of Redis only supports a limited set of Redis commands.
 Please refer to `redis/server.go` for the list of supported commands.
 It is put out as an implementation example of the [go-pmem-transaction](https://github.com/vmware/go-pmem-transaction)
 library.
+
+By default the database file is created at the same path from which the application
+is run. This location can be changed by modifying the `DATABASE` string in
+`redis/server.go`. If the database file is not created in a persistent memory
+device, then application performance will be really slow. If a persistent memory
+device is not available, then it can be emulated using DRAM. See documentation
+[here](https://pmem.io/2016/02/22/pm-emulation.html).
 
 ## Contributing
 
