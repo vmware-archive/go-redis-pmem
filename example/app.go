@@ -5,9 +5,7 @@
 
 package main
 
-import (
-	"pmem/redis"
-)
+import "github.com/vmware-samples/go-redis-pmem/redis"
 
 func main() {
 	redis.RunServer()
