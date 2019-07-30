@@ -300,6 +300,7 @@ func (c *client) processInput() {
 	curr := 0       // curr pos of processing
 	finish := false // finish processing a query
 	for {
+		c.tx.Begin()
 		n, err := c.conn.Read(c.querybuf[pos:])
 		if err != nil { // TODO: check error
 			fmt.Println("Reading from client:", err)
@@ -338,6 +339,7 @@ func (c *client) processInput() {
 			pos = 0
 			curr = 0
 		}
+		c.tx.End()
 		c.wBuffer.Flush()
 	}
 }
@@ -426,10 +428,8 @@ func (c *client) processCommand() {
 	if c.cmd == nil {
 		c.notSupported()
 	} else {
-		// c.printCommand()
-		c.tx.Begin()
 		c.cmd.proc(c)
-		c.tx.End()
+		c.tx.Unlock()
 	}
 }
 
