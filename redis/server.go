@@ -328,13 +328,17 @@ func (c *client) processInput() {
 
 		// expand query buffer if full. TODO: set max query buffer length.
 		if pos == len(c.querybuf) {
-			//fmt.Println("Rewind input buffer of ", curr)
-			c.querybuf = append(c.querybuf, make([]byte, 16*1024)...)
+			nBuf := make([]byte, len(c.querybuf)*2)
+			copy(nBuf, c.querybuf[curr:pos])
+			pos -= curr
+			curr = 0
+			c.querybuf = nBuf
 		}
 		if pos == curr {
 			pos = 0
 			curr = 0
 		}
+		c.wBuffer.Flush()
 	}
 }
 
@@ -426,7 +430,6 @@ func (c *client) processCommand() {
 		c.tx.Begin()
 		c.cmd.proc(c)
 		c.tx.End()
-		c.wBuffer.Flush()
 	}
 }
 
