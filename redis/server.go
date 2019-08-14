@@ -271,11 +271,11 @@ func (s *server) Cron() {
 }
 
 func (s *server) handleClient(conn *net.TCPConn) {
-	// defer conn.Close()
 	c := s.newClient(conn)
 	c.conn.SetNoDelay(false) // try batching packet to improve tp.
 	c.processInput()
-	//go c.processOutput()
+	transaction.Release(c.tx)
+	conn.Close()
 }
 
 func (s *server) newClient(conn *net.TCPConn) *client {
@@ -291,7 +291,7 @@ func (s *server) newClient(conn *net.TCPConn) *client {
 		bulklen:      -1,
 		replybuf:     nil,
 		cmd:          nil,
-		tx:           nil}
+		tx:           transaction.NewUndoTx()}
 }
 
 // Process input buffer and call command.
@@ -423,13 +423,9 @@ func (c *client) processCommand() {
 		c.notSupported()
 	} else {
 		// c.printCommand()
-		c.tx = transaction.NewUndoTx()
 		c.tx.Begin()
 		c.cmd.proc(c)
 		c.tx.End()
-		//c.tx.Abort()
-		transaction.Release(c.tx)
-		c.tx = nil
 		c.wBuffer.Flush()
 	}
 }
