@@ -1,3 +1,12 @@
+// +build consistency
+
+// This test requires to be run twice to check for data consistency issues.
+// Hence this test is not run by default and will only be run if a flag
+// 'consistency' is specified while running the tests.
+//
+// E.g.: ~/go-pmem/bin/go test -tags="consistency" -v # run 1
+// E.g.: ~/go-pmem/bin/go test -tags="consistency" -v # run 2
+
 package tests
 
 import (
@@ -14,9 +23,10 @@ import (
 )
 
 var (
-	database = "./database"
-	ip       = "127.0.0.1"
-	port     = "6379"
+	database      = "./database"
+	ip            = "127.0.0.1"
+	port          = "6379"
+	numIterations = 20000
 )
 
 // fileExists checks if a file exists and is not a directory
@@ -35,7 +45,7 @@ func client1() {
 	conn, err := net.Dial("tcp", ip+":"+port)
 	errHandler(err)
 
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < numIterations; i++ {
 		as := strconv.Itoa(a)
 		bs := strconv.Itoa(b)
 		alen := strconv.Itoa(len(as))
@@ -65,19 +75,17 @@ func client2() {
 
 	// Sleep for some time so that client 1 gets a chance to run a few SET
 	// iterations
-	time.Sleep(time.Millisecond * 100)
+	time.Sleep(time.Millisecond * 50)
 
 	a, b, _ := getValues()
 	c := strconv.Itoa(a + b)
 	clen := strconv.Itoa(len(c))
-	println("Client 2 - Got a as ", a, " and b as ", b, ". Set c as ", c)
 	fmt.Fprintf(conn, "*3\r\n$3\r\nSET\r\n$1\r\nC\r\n$%s\r\n%s\r\n", clen, c)
 	conn.Close()
-	time.Sleep(time.Millisecond * 100)
-
-	// induce a crash here
-	var iptr *int
-	println(*iptr)
+	time.Sleep(time.Millisecond * 10)
+	println("Client 2 - Got a = ", a, " b = ", b, ". Set c = ", c)
+	// Kill the application here
+	os.Exit(0)
 }
 
 func errHandler(err error) {
@@ -117,13 +125,13 @@ func getValues() (int, int, int) {
 // Test if clients observe any data inconsistencies while simultaneously issuing
 // SET requests.
 // The tests need to be run two times to see the issue. On the first run,
-// client 1 increments the value of a and b 2000 times. Simultaneously, client 2
-// reads the value of a and b, and sets the value of c as a+b. It induces a
-// crash soon after.
+// client 1 increments the value of a and b $numIterations times. Simultaneously
+// client 2 reads the value of a and b, and sets the value of c as a+b. It
+// induces an application crash soon after.
 // On the next run, the value of a, b, and c is read back and verified to ensure
 // that c is less than or equal to a+b. The test may need to be run a few times
 // to see the issue. On each separate invocation of the test, the Redis data
-// file has to deleted - $ rm ./database
+// file has to deleted - $ rm $database
 func TestPipeline(t *testing.T) {
 	// add this test to the tests folder but ignore it by default
 
@@ -131,8 +139,8 @@ func TestPipeline(t *testing.T) {
 
 	go redis.RunServer()
 
-	// Sleep for 2 seconds to give redis server enough time to come up
-	time.Sleep(time.Second * 2)
+	// Sleep for 5 seconds to give redis server enough time to come up
+	time.Sleep(time.Second * 5)
 
 	if firstInit {
 		client1()
