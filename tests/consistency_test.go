@@ -38,6 +38,19 @@ func fileExists(filename string) bool {
 	return !info.IsDir()
 }
 
+// sleepReady tries to connect to ip:port in a loop. This is used to identify
+// when Go Redis is ready to serve clients.
+func sleepReady() {
+	for {
+		conn, _ := net.DialTimeout("tcp", net.JoinHostPort(ip, port), time.Second)
+		if conn != nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 func client1() {
 	a, b := 0, 0
 	var request string
@@ -66,6 +79,7 @@ func client1() {
 	fmt.Fprintf(conn, request)
 
 	for {
+		time.Sleep(time.Second)
 	}
 }
 
@@ -82,7 +96,7 @@ func client2() {
 	clen := strconv.Itoa(len(c))
 	fmt.Fprintf(conn, "*3\r\n$3\r\nSET\r\n$1\r\nC\r\n$%s\r\n%s\r\n", clen, c)
 	conn.Close()
-	time.Sleep(time.Millisecond * 10)
+	time.Sleep(time.Millisecond * 30)
 	println("Client 2 - Got a = ", a, " b = ", b, ". Set c = ", c)
 	// Kill the application here
 	os.Exit(0)
@@ -90,7 +104,7 @@ func client2() {
 
 func errHandler(err error) {
 	if err != nil {
-		log.Fatal((err))
+		log.Fatal(err)
 	}
 }
 
@@ -132,15 +146,15 @@ func getValues() (int, int, int) {
 // that c is less than or equal to a+b. The test may need to be run a few times
 // to see the issue. On each separate invocation of the test, the Redis data
 // file has to deleted - $ rm $database
-func TestPipeline(t *testing.T) {
+func TestConsistency(t *testing.T) {
 	// add this test to the tests folder but ignore it by default
 
 	firstInit := !fileExists(database)
 
 	go redis.RunServer()
 
-	// Sleep for 5 seconds to give redis server enough time to come up
-	time.Sleep(time.Second * 5)
+	// Sleep until Go Redis is ready to serve clients
+	sleepReady()
 
 	if firstInit {
 		client1()
