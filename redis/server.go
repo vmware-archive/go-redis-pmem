@@ -64,7 +64,6 @@ type (
 )
 
 const (
-	DATABASE string = "./database"
 	PORT     string = ":6379"
 	MAGIC    int    = 0x3F4F357F7C9824B3
 
@@ -174,14 +173,14 @@ var (
 	pstart, pend uintptr
 )
 
-func RunServer() {
+func RunServer(dbName string) {
 	s := new(server)
-	s.Start()
+	s.Start(dbName)
 }
 
-func (s *server) Start() {
+func (s *server) Start(dbName string) {
 	// Initialize database
-	s.init(DATABASE)
+	s.init(dbName)
 	// accept client connections
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", PORT)
 	fatalError(err)

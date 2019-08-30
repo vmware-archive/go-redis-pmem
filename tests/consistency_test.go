@@ -151,7 +151,7 @@ func TestConsistency(t *testing.T) {
 
 	firstInit := !fileExists(database)
 
-	go redis.RunServer()
+	go redis.RunServer("./database")
 
 	// Sleep until Go Redis is ready to serve clients
 	sleepReady()
