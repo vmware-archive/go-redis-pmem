@@ -47,7 +47,7 @@ const (
 	ZIP_INT_IMM_MASK uint8 = 0x0f
 )
 
-func ziplistNew(tx transaction.TX) *ziplist {
+func ziplistNew() *ziplist {
 	return pnew(ziplist)
 }
 
@@ -172,33 +172,33 @@ func (zl *ziplist) Len() int {
 }
 
 // push val to the tail of list.
-func (zl *ziplist) Push(tx transaction.TX, val interface{}, head bool) {
+func (zl *ziplist) Push(val interface{}, head bool) {
 	if head {
-		zl.insert(tx, 0, val)
+		zl.insert(0, val)
 	} else {
-		zl.insert(tx, len(zl.data), val)
+		zl.insert(len(zl.data), val)
 	}
 }
 
 // delete a single entry at pos
-func (zl *ziplist) Delete(tx transaction.TX, pos int) {
-	zl.delete(tx, pos, 1)
+func (zl *ziplist) Delete(pos int) {
+	zl.delete(pos, 1)
 }
 
 // delete range of entries from pos.
-func (zl *ziplist) DeleteRange(tx transaction.TX, idx int, num uint) {
+func (zl *ziplist) DeleteRange(idx int, num uint) {
 	pos := zl.Index(idx)
 	if pos >= 0 {
-		zl.delete(tx, pos, num)
+		zl.delete(pos, num)
 	}
 }
 
 // append zl2 to zl
-func (zl *ziplist) Merge(tx transaction.TX, zl2 *ziplist) {
+func (zl *ziplist) Merge(zl2 *ziplist) {
 	if zl == zl2 {
 		return // do not allow merge self
 	}
-	tx.Log(zl)
+	txn("undo") {
 	// update entries and new tail position
 	zl.entries += zl2.entries
 	oldtail := zl.zltail
@@ -212,9 +212,10 @@ func (zl *ziplist) Merge(tx transaction.TX, zl2 *ziplist) {
 	newdata, tailshift = cascadeUpdate(newdata, oldtail)
 	zl.zltail += tailshift
 	zl.data = newdata
+	}
 }
 
-func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
+func (zl *ziplist) insert(pos int, val interface{}) {
 	// construct new entry in tmp volatile slice
 	prevlensize, prevlen := zl.prevlen(pos)
 	// fmt.Println("insert to", pos, "prev len", prevlensize, prevlen)
@@ -242,7 +243,7 @@ func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
 	// fmt.Println("newentry", len(entry), entry)
 
 	// insert entry into zl
-	tx.Log(zl)
+	txn("undo") {
 	// TODO: implement persistent append/realloc/memmove. Currently always copy to newly allocated slice
 	newdata := pmake([]byte, len(zl.data)+len(entry))
 	tailShift := 0
@@ -261,10 +262,11 @@ func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
 	runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
 	zl.data = newdata
 	zl.entries++
+	}
 	// fmt.Println("insert finish, new entries, len", zl.entries, len(zl.data), zl.data)
 }
 
-func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
+func (zl *ziplist) delete(pos int, num uint) {
 	deleted := uint(0)
 	end := pos
 	for deleted < num && end >= 0 {
@@ -272,7 +274,7 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 		deleted++
 	}
 	if deleted > 0 {
-		tx.Log(zl)
+		txn("undo") {
 		zl.entries -= deleted
 		prevlensize, prevlen := zipEntryPrevlen(zl.data[pos:])
 		if end == -1 {
@@ -300,6 +302,7 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 			runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
 			zl.data = newdata
 			zl.zltail += tailShift
+		}
 		}
 	}
 }
@@ -523,15 +526,16 @@ func zipLoadInteger(v []byte, encoding byte) int64 {
 	return ret
 }
 
-func (zl *ziplist) deepCopy(tx transaction.TX) *ziplist {
-	newzl := ziplistNew(tx)
+func (zl *ziplist) deepCopy() *ziplist {
+	newzl := ziplistNew()
 	newdata := pmake([]byte, zl.Len())
 	copy(newdata, zl.data)
 	runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
-	tx.Log(newzl)
+	txn("undo") {
 	newzl.entries = zl.entries
 	newzl.zltail = zl.zltail
 	newzl.data = newdata
+	}
 	return newzl
 }
 

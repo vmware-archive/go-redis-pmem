@@ -51,7 +51,6 @@ type (
 		replybuf     [][]byte
 
 		cmd *redisCommand
-		tx  transaction.TX
 	}
 
 	sharedObjects struct {
@@ -202,14 +201,11 @@ func (s *server) Start() {
 }
 
 func populateDb(db *redisDb) {
-	tx := transaction.NewUndoTx()
-	tx.Begin()
-	tx.Log(db)
-	db.dict = NewDict(tx, 1024, 32)
-	db.expire = NewDict(tx, 128, 1)
-	db.magic = MAGIC
-	tx.End()
-	transaction.Release(tx)
+	txn("undo") {
+		db.dict = NewDict(1024, 32)
+		db.expire = NewDict(128, 1)
+		db.magic = MAGIC
+	}
 }
 
 func (s *server) init(path string) {
@@ -229,9 +225,9 @@ func (s *server) init(path string) {
 			populateDb(db)
 		}
 		s.db = db
-		tx := transaction.NewUndoTx()
-		tx.Exec(s.db.swizzle)
-		transaction.Release(tx)
+		txn("undo") {
+			s.db.swizzle()
+		}
 	}
 	s.populateCommandTable()
 	createSharedObjects()
@@ -274,7 +270,6 @@ func (s *server) handleClient(conn *net.TCPConn) {
 	c := s.newClient(conn)
 	c.conn.SetNoDelay(false) // try batching packet to improve tp.
 	c.processInput()
-	transaction.Release(c.tx)
 	conn.Close()
 }
 
@@ -290,8 +285,7 @@ func (s *server) newClient(conn *net.TCPConn) *client {
 		multibulklen: 0,
 		bulklen:      -1,
 		replybuf:     nil,
-		cmd:          nil,
-		tx:           transaction.NewUndoTx()}
+		cmd:          nil}
 }
 
 // Process input buffer and call command.
@@ -427,9 +421,13 @@ func (c *client) processCommand() {
 		c.notSupported()
 	} else {
 		// c.printCommand()
-		c.tx.Begin()
+		txn ("undo") {
 		c.cmd.proc(c)
-		c.tx.End()
+		// TODO: mohitv remove below...used for crash
+		//fmt.Println("going to sleep before committing tx, crash now")
+		//time.Sleep(2 * time.Second)
+		//fmt.Println("oops...woke up!")
+		}
 	}
 }
 

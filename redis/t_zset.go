@@ -102,13 +102,13 @@ const (
 	SET_OP_UNION_NOLOCK = 3
 )
 
-func (zs *zset) swizzle(tx transaction.TX) {
+func (zs *zset) swizzle() {
 	inPMem(unsafe.Pointer(zs))
-	zs.zsl.swizzle(tx)
-	zs.dict.swizzle(tx)
+	zs.zsl.swizzle()
+	zs.dict.swizzle()
 }
 
-func (zsl *zskiplist) swizzle(tx transaction.TX) {
+func (zsl *zskiplist) swizzle() {
 	inPMem(unsafe.Pointer(zsl))
 	inPMem(unsafe.Pointer(zsl.header))
 	inPMem(unsafe.Pointer(zsl.tail))
@@ -213,15 +213,15 @@ func zaddGenericCommand(c *client, flags int) {
 	}
 
 	// Lookup the key and create the sorted set if does not exist.
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	zobj = c.db.lookupKeyWrite(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.argv[1])
+	zobj = c.db.lookupKeyWrite(c.argv[1])
 	if zobj == nil {
 		if xx {
 			goto reply_to_client // No key + XX option: nothing to do.
 		}
 		// TODO: implement ziplist encoding.
-		zobj = zsetCreate(c.tx)
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), zobj)
+		zobj = zsetCreate()
+		c.db.setKey(shadowCopyToPmem(c.argv[1]), zobj)
 	} else {
 		switch zobj.(type) {
 		case *zset:
@@ -276,8 +276,8 @@ cleanup:
 }
 
 func zremCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	c.db.lockKeyWrite(c.argv[1])
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -289,7 +289,7 @@ func zremCommand(c *client) {
 			deleted++
 		}
 		if zsetLength(zobj) == 0 {
-			c.db.delete(c.tx, c.argv[1])
+			c.db.delete(c.argv[1])
 			keyremoved = true
 			break
 		}
@@ -347,8 +347,8 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 	}
 
 	// Step 2: Lookup & range sanity checks if needed.
-	c.db.lockKeyWrite(c.tx, key)
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(c.tx, key), shared.czero)
+	c.db.lockKeyWrite(key)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyWrite(key), shared.czero)
 	if !ok || zobj == nil {
 		return
 	}
@@ -381,14 +381,14 @@ func zremrangeGenericCommand(c *client, rangetype int) {
 	switch z := zobj.(type) {
 	case *zset:
 		if rangetype == ZRANGE_RANK {
-			deleted = zslDeleteRangeByRank(c.tx, z.zsl, uint(start+1), uint(end+1), z.dict)
+			deleted = zslDeleteRangeByRank(z.zsl, uint(start+1), uint(end+1), z.dict)
 		} else if rangetype == ZRANGE_SCORE {
-			deleted = zslDeleteRangeByScore(c.tx, z.zsl, &zrange, z.dict)
+			deleted = zslDeleteRangeByScore(z.zsl, &zrange, z.dict)
 		} else {
-			deleted = zslDeleteRangeByLex(c.tx, z.zsl, &lexrange, z.dict)
+			deleted = zslDeleteRangeByLex(z.zsl, &lexrange, z.dict)
 		}
 		if z.zsl.length == 0 {
-			c.db.delete(c.tx, key)
+			c.db.delete(key)
 		}
 		if deleted > 0 {
 			go hashTypeBgResize(c.db, key)
@@ -433,11 +433,11 @@ func zrangeGenericCommand(c *client, reverse bool) {
 		return
 	}
 
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
 	}
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -556,12 +556,12 @@ func genericZrangebyscoreCommand(c *client, reverse bool) {
 	}
 
 	// Ok, lookup the key and get the range
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
 	}
 
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -645,12 +645,12 @@ func zcountCommand(c *client) {
 	}
 
 	// Lookup the sorted set
-	if !c.db.lockKeyRead(c.tx, key) { // expired
+	if !c.db.lockKeyRead(key) { // expired
 		c.addReply(shared.czero)
 		return
 	}
 	var count uint
-	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(key), shared.czero); ok && zobj != nil {
 		switch zs := zobj.(type) {
 		case *zset:
 			// Find first element in range
@@ -685,12 +685,12 @@ func zlexcountCommand(c *client) {
 	}
 
 	// Lookup the sorted set
-	if !c.db.lockKeyRead(c.tx, key) { // expired
+	if !c.db.lockKeyRead(key) { // expired
 		c.addReply(shared.czero)
 		return
 	}
 	var count uint
-	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, key), shared.czero); ok && zobj != nil {
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(key), shared.czero); ok && zobj != nil {
 		switch zs := zobj.(type) {
 		case *zset:
 			// Find first element in range
@@ -767,12 +767,12 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 	}
 
 	// Ok, lookup the key and get the range
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
 	}
 
-	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || zobj == nil {
 		return
 	}
@@ -838,23 +838,23 @@ func genericZrangebylexCommand(c *client, reverse bool) {
 }
 
 func zcardCommand(c *client) {
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.czero)
 		return
 	}
 
-	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero); ok && zobj != nil {
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.czero); ok && zobj != nil {
 		c.addReplyLongLong(int64(zsetLength(zobj)))
 	}
 }
 
 func zscoreCommand(c *client) {
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.nullbulk)
 		return
 	}
 
-	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk); ok && zobj != nil {
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.nullbulk); ok && zobj != nil {
 		if score, ok := zsetScore(zobj, c.argv[2]); ok {
 			c.addReplyDouble(score)
 		} else {
@@ -872,12 +872,12 @@ func zrevrankCommand(c *client) {
 }
 
 func zrankGenericCommand(c *client, reverse bool) {
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.nullbulk)
 		return
 	}
 
-	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk); ok && zobj != nil {
+	if zobj, ok := c.getZsetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.nullbulk); ok && zobj != nil {
 		if rank, ok := zsetRank(zobj, c.argv[2], reverse); ok {
 			c.addReplyLongLong(int64(rank))
 		} else {
@@ -920,11 +920,11 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 	keys := make([][]byte, setnum+1)
 	keys[0] = dstkey
 	copy(keys[1:], c.argv[3:])
-	c.db.lockKeysWrite(c.tx, keys, 1)
+	c.db.lockKeysWrite(keys, 1)
 
 	src := make([]zsetopsrc, setnum)
 	for i := 0; i < setnum; i++ {
-		if zobj, ok := c.getSetZsetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[i+3]), nil); !ok {
+		if zobj, ok := c.getSetZsetOrReply(c.db.lookupKeyWrite(c.argv[i+3]), nil); !ok {
 			return
 		} else {
 			src[i].subject = zobj
@@ -971,7 +971,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 	// sort sets from the smallest to largest, this will improve our
 	// algorithm's performance
 	sort.Sort(zsetops(src))
-	dstzset := zsetCreate(c.tx)
+	dstzset := zsetCreate()
 	zval := new(zsetopval)
 	if op == SET_OP_INTER {
 		// Skip everything if the smallest input is empty.
@@ -1003,13 +1003,13 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 				// Only continue when present in every input.
 				if j == setnum {
 					tmp := zval.zuiNewSdsFromValue()
-					dstzset.zsl.insert(c.tx, score, tmp)
-					dstzset.dict.set(c.tx, tmp, score)
+					dstzset.zsl.insert(score, tmp)
+					dstzset.dict.set(tmp, score)
 				}
 			}
 		}
 	} else if op == SET_OP_UNION {
-		accumulator := NewDict(c.tx, int(src[setnum-1].zuiLength()), 1024)
+		accumulator := NewDict(int(src[setnum-1].zuiLength()), 1024)
 		// Step 1: Create a dictionary of elements -> aggregated-scores
 		// by iterating one sorted set after the other.
 		for i := 0; i < setnum; i++ {
@@ -1027,10 +1027,11 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 				_, _, _, de := accumulator.find(zval.ele)
 				if de == nil {
 					tmp := zval.zuiNewSdsFromValue()
-					accumulator.set(c.tx, tmp, score)
+					accumulator.set(tmp, score)
 				} else {
-					c.tx.Log(de)
+					txn("undo") {
 					de.value = zuinionInterAggregate(de.value.(float64), score, aggregate)
+					}
 				}
 			}
 		}
@@ -1038,16 +1039,17 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 		// directly store score in zset dict, we can directly use it.
 		di := accumulator.getIterator()
 		for de := di.next(); de != nil; de = di.next() {
-			dstzset.zsl.insert(c.tx, de.value.(float64), de.key)
+			dstzset.zsl.insert(de.value.(float64), de.key)
 		}
-		c.tx.Log(&dstzset.dict)
+		txn("undo") {
 		dstzset.dict = accumulator
+		}
 	} else {
 		panic("Unknown operator")
 	}
-	c.db.delete(c.tx, dstkey)
+	c.db.delete(dstkey)
 	if dstzset.zsl.length > 0 {
-		c.db.setKey(c.tx, shadowCopyToPmem(dstkey), dstzset)
+		c.db.setKey(shadowCopyToPmem(dstkey), dstzset)
 		c.addReplyLongLong(int64(dstzset.zsl.length))
 	} else {
 		c.addReply(shared.czero)
@@ -1055,11 +1057,12 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 }
 
 // ============== common zset api ====================
-func zsetCreate(tx transaction.TX) *zset {
+func zsetCreate() *zset {
 	zs := pnew(zset)
-	tx.Log(zs)
-	zs.dict = NewDict(tx, 4, 4)
-	zs.zsl = zslCreate(tx)
+	txn("undo") {
+	zs.dict = NewDict(4, 4)
+	zs.zsl = zslCreate()
+	}
 	return zs
 }
 
@@ -1094,19 +1097,20 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 
 			// Remove and re-insert when score changes.
 			if score != curscore {
-				node := zs.zsl.delete(c.tx, curscore, ele)
-				zs.zsl.insert(c.tx, score, node.ele)
-				c.tx.Log(de)
+				node := zs.zsl.delete(curscore, ele)
+				zs.zsl.insert(score, node.ele)
+				txn("undo") {
 				// Change dictionary value to directly store score value instead
 				// of pointer to score in zsl.
 				de.value = score
+				}
 				flags |= ZADD_UPDATED
 			}
 			return 1, score, flags
 		} else if !xx {
 			ele = shadowCopyToPmem(ele)
-			zs.zsl.insert(c.tx, score, ele)
-			zs.dict.set(c.tx, ele, score)
+			zs.zsl.insert(score, ele)
+			zs.dict.set(ele, score)
 			go hashTypeBgResize(c.db, c.argv[1])
 			return 1, score, flags | ZADD_ADDED
 		} else {
@@ -1121,10 +1125,10 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 func zsetDel(c *client, zobj interface{}, ele []byte) bool {
 	switch zs := zobj.(type) {
 	case *zset:
-		de := zs.dict.delete(c.tx, ele)
+		de := zs.dict.delete(ele)
 		if de != nil {
 			score := de.value.(float64)
-			retvalue := zs.zsl.delete(c.tx, score, ele)
+			retvalue := zs.zsl.delete(score, ele)
 			if retvalue == nil {
 				panic("Zset dict and skiplist does not match!")
 			}
@@ -1186,21 +1190,23 @@ func zsetRank(zobj interface{}, ele []byte, reverse bool) (uint, bool) {
 
 // ============== common skiplist api ====================
 
-func zslCreate(tx transaction.TX) *zskiplist {
+func zslCreate() *zskiplist {
 	zsl := pnew(zskiplist)
-	tx.Log(zsl)
+	txn("undo") {
 	zsl.level = 1
 	zsl.length = 0
-	zsl.header = zslCreateNode(tx, ZSKIPLIST_MAXLEVEL, 0, nil)
+	zsl.header = zslCreateNode(ZSKIPLIST_MAXLEVEL, 0, nil)
+	}
 	return zsl
 }
 
-func zslCreateNode(tx transaction.TX, level int, score float64, ele []byte) *zskiplistNode {
+func zslCreateNode(level int, score float64, ele []byte) *zskiplistNode {
 	zn := pnew(zskiplistNode)
-	tx.Log(zn)
+	txn("undo") {
 	zn.score = score
 	zn.ele = ele
 	zn.level = pmake([]zskiplistLevel, level)
+	}
 	return zn
 }
 
@@ -1261,7 +1267,7 @@ func zslValueLteMax(value float64, spec *zrangespec) bool {
 	}
 }
 
-func zslDeleteRangeByRank(tx transaction.TX, zsl *zskiplist, start, end uint, dict *dict) uint {
+func zslDeleteRangeByRank(zsl *zskiplist, start, end uint, dict *dict) uint {
 	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
 	var traversed, removed uint
@@ -1275,8 +1281,8 @@ func zslDeleteRangeByRank(tx transaction.TX, zsl *zskiplist, start, end uint, di
 	traversed++
 	x = x.level[0].forward
 	for x != nil && traversed <= end {
-		zsl.deleteNode(tx, x, update)
-		dict.delete(tx, x.ele)
+		zsl.deleteNode(x, update)
+		dict.delete(x.ele)
 		removed++
 		traversed++
 		x = x.level[0].forward
@@ -1284,7 +1290,7 @@ func zslDeleteRangeByRank(tx transaction.TX, zsl *zskiplist, start, end uint, di
 	return removed
 }
 
-func zslDeleteRangeByScore(tx transaction.TX, zsl *zskiplist, zrange *zrangespec, dict *dict) uint {
+func zslDeleteRangeByScore(zsl *zskiplist, zrange *zrangespec, dict *dict) uint {
 	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
 	var removed uint
@@ -1303,8 +1309,8 @@ func zslDeleteRangeByScore(tx transaction.TX, zsl *zskiplist, zrange *zrangespec
 	for x != nil {
 		if (zrange.maxex && x.score < zrange.max) ||
 			(!zrange.maxex && x.score <= zrange.max) {
-			zsl.deleteNode(tx, x, update)
-			dict.delete(tx, x.ele)
+			zsl.deleteNode(x, update)
+			dict.delete(x.ele)
 			removed++
 			x = x.level[0].forward
 		} else {
@@ -1314,7 +1320,7 @@ func zslDeleteRangeByScore(tx transaction.TX, zsl *zskiplist, zrange *zrangespec
 	return removed
 }
 
-func zslDeleteRangeByLex(tx transaction.TX, zsl *zskiplist, lexrange *zlexrangespec, dict *dict) uint {
+func zslDeleteRangeByLex(zsl *zskiplist, lexrange *zlexrangespec, dict *dict) uint {
 	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
 	var removed uint
@@ -1327,15 +1333,15 @@ func zslDeleteRangeByLex(tx transaction.TX, zsl *zskiplist, lexrange *zlexranges
 	}
 	x = x.level[0].forward
 	for x != nil && zslLexValueLteMax(x.ele, lexrange) {
-		zsl.deleteNode(tx, x, update)
-		dict.delete(tx, x.ele)
+		zsl.deleteNode(x, update)
+		dict.delete(x.ele)
 		removed++
 		x = x.level[0].forward
 	}
 	return removed
 }
 
-func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zskiplistNode {
+func (zsl *zskiplist) insert(score float64, ele []byte) *zskiplistNode {
 	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
 	rank := make([]uint, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
@@ -1359,10 +1365,9 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 	// scores, reinserting the same element should never happen since the
 	// caller of zslInsert() should test in the hash table if the element is
 	// already inside or not.
-	tx.Log(zsl)
+	txn("undo") {
 	level := zslRandomLevel()
 	if level > zsl.level {
-		tx.Log(zsl.header.level[zsl.level:])
 		for i := zsl.level; i < level; i++ {
 			rank[i] = 0
 			update[i] = zsl.header
@@ -1370,12 +1375,9 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 		}
 		zsl.level = level
 	}
-	x = zslCreateNode(tx, level, score, ele)
-	tx.Log(x)
-	tx.Log(x.level)
+	x = zslCreateNode(level, score, ele)
 	for i := 0; i < level; i++ {
 		x.level[i].forward = update[i].level[i].forward
-		tx.Log(&update[i].level[i])
 		update[i].level[i].forward = x
 
 		// update span covered by update[i] as x is inserted here
@@ -1394,16 +1396,16 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 		x.backward = update[0]
 	}
 	if x.level[0].forward != nil {
-		tx.Log(&x.level[0].forward.backward)
 		x.level[0].forward.backward = x
 	} else {
 		zsl.tail = x
 	}
 	zsl.length++
+	}
 	return x
 }
 
-func (zsl *zskiplist) delete(tx transaction.TX, score float64, ele []byte) *zskiplistNode {
+func (zsl *zskiplist) delete(score float64, ele []byte) *zskiplistNode {
 	update := make([]*zskiplistNode, ZSKIPLIST_MAXLEVEL)
 	x := zsl.header
 
@@ -1419,15 +1421,15 @@ func (zsl *zskiplist) delete(tx transaction.TX, score float64, ele []byte) *zski
 
 	x = x.level[0].forward
 	if x != nil && score == x.score && bytes.Compare(x.ele, ele) == 0 {
-		zsl.deleteNode(tx, x, update)
+		zsl.deleteNode(x, update)
 		return x
 	}
 	return nil
 }
 
-func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*zskiplistNode) {
+func (zsl *zskiplist) deleteNode(x *zskiplistNode, update []*zskiplistNode) {
+	txn("undo") {
 	for i := 0; i < zsl.level; i++ {
-		tx.Log(&update[i].level[i])
 		if update[i].level[i].forward == x {
 			update[i].level[i].span += x.level[i].span - 1
 			update[i].level[i].forward = x.level[i].forward
@@ -1435,10 +1437,8 @@ func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*
 			update[i].level[i].span -= 1
 		}
 	}
-
-	tx.Log(zsl)
+	
 	if x.level[0].forward != nil {
-		tx.Log(&x.level[0].forward.backward)
 		x.level[0].forward.backward = x.backward
 	} else {
 		zsl.tail = x.backward
@@ -1448,6 +1448,7 @@ func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*
 		zsl.level--
 	}
 	zsl.length--
+	}
 }
 
 func (zsl *zskiplist) getElementByRank(rank uint) *zskiplistNode {

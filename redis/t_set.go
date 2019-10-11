@@ -7,8 +7,6 @@ package redis
 
 import (
 	"sort"
-
-	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (
@@ -29,14 +27,14 @@ const (
 
 // ============== set commands ====================
 func saddCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.argv[1])
 	var added int64
-	if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); !ok {
+	if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.argv[1]), nil); !ok {
 		return
 	} else {
 		if set == nil {
-			set = setTypeCreate(c.tx, c.argv[2])
-			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), set)
+			set = setTypeCreate(c.argv[2])
+			c.db.setKey(shadowCopyToPmem(c.argv[1]), set)
 		}
 		for j := 2; j < c.argc; j++ {
 			if setTypeAdd(c, c.argv[1], set, c.argv[j]) {
@@ -48,9 +46,9 @@ func saddCommand(c *client) {
 }
 
 func sremCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.argv[1])
 	var deleted int64
-	set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
+	set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero)
 	if !ok || set == nil {
 		return
 	} else {
@@ -58,7 +56,7 @@ func sremCommand(c *client) {
 			if setTypeRemove(c, c.argv[1], set, c.argv[j]) {
 				deleted++
 				if setTypeSize(set) == 0 {
-					c.db.delete(c.tx, c.argv[1])
+					c.db.delete(c.argv[1])
 					break
 				}
 			}
@@ -68,16 +66,16 @@ func sremCommand(c *client) {
 }
 
 func smoveCommand(c *client) {
-	c.db.lockKeysWrite(c.tx, c.argv[1:3], 1)
+	c.db.lockKeysWrite(c.argv[1:3], 1)
 	var srcset, dstset interface{}
 	ele := c.argv[3]
 	ok := false
 	// If the source key does not exist return 0
-	if srcset, ok = c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero); !ok || srcset == nil {
+	if srcset, ok = c.getSetOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero); !ok || srcset == nil {
 		return
 	}
 	// If the destination key is set and has the wrong type, return with an error.
-	if dstset, ok = c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[2]), nil); !ok {
+	if dstset, ok = c.getSetOrReply(c.db.lookupKeyWrite(c.argv[2]), nil); !ok {
 		return
 	}
 
@@ -99,13 +97,13 @@ func smoveCommand(c *client) {
 
 	// Remove the src set from the database when empty
 	if setTypeSize(srcset) == 0 {
-		c.db.delete(c.tx, c.argv[1])
+		c.db.delete(c.argv[1])
 	}
 
 	// Create the destination set when it doesn't exist
 	if dstset == nil {
-		dstset = setTypeCreate(c.tx, ele)
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[2]), dstset)
+		dstset = setTypeCreate(ele)
+		c.db.setKey(shadowCopyToPmem(c.argv[2]), dstset)
 	}
 
 	// An extra key has changed when ele was successfully added to dstset
@@ -126,8 +124,8 @@ func spopCommand(c *client) {
 
 	// Make sure a key with the name inputted exists, and that it's type is
 	// indeed a set
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.nullbulk)
+	c.db.lockKeyWrite(c.argv[1])
+	set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.nullbulk)
 	if !ok || set == nil {
 		return
 	}
@@ -144,7 +142,7 @@ func spopCommand(c *client) {
 
 	// Delete the set if it's empty
 	if setTypeSize(set) == 0 {
-		c.db.delete(c.tx, c.argv[1])
+		c.db.delete(c.argv[1])
 	}
 }
 
@@ -161,8 +159,8 @@ func spopWithCountCommand(c *client) {
 
 	// Make sure a key with the name inputted exists, and that it's type is
 	// indeed a set. Otherwise, return nil
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	set, ok2 := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.nullbulk)
+	c.db.lockKeyWrite(c.argv[1])
+	set, ok2 := c.getSetOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.nullbulk)
 	if !ok2 || set == nil {
 		return
 	}
@@ -185,7 +183,7 @@ func spopWithCountCommand(c *client) {
 		sunionDiffGenericCommand(c, c.argv[1:2], nil, SET_OP_UNION_NOLOCK)
 
 		// Delete the set as it is now empty
-		c.db.delete(c.tx, c.argv[1])
+		c.db.delete(c.argv[1])
 		return
 	}
 
@@ -220,7 +218,7 @@ func spopWithCountCommand(c *client) {
 		// set). Then we return the elements left in the original set and
 		// release it.
 
-		newset := setTypeCreate(c.tx, nil)
+		newset := setTypeCreate(nil)
 		for ; remaining > 0; remaining-- {
 			ele := setTypeRandomElement(set)
 			setTypeAdd(c, nil, newset, ele)
@@ -229,7 +227,7 @@ func spopWithCountCommand(c *client) {
 
 		// Assign the new set as the key value.
 		// No need to copy argv[1] into pmem as we already know key exists in db
-		c.db.setKey(c.tx, c.argv[1], newset)
+		c.db.setKey(c.argv[1], newset)
 
 		// Tranfer the old set to the client.
 		si := setTypeInitIterator(set)
@@ -249,11 +247,11 @@ func srandmemberCommand(c *client) {
 		return
 	}
 
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.nullbulk)
 		return
 	}
-	set, ok := c.getSetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk)
+	set, ok := c.getSetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.nullbulk)
 	if !ok || set == nil {
 		return
 	}
@@ -277,11 +275,11 @@ func srandmemberWithCountCommand(c *client) {
 	}
 	count := int(ll)
 
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) { // expired
+	if !c.db.lockKeyRead(c.argv[1]) { // expired
 		c.addReply(shared.emptymultibulk)
 		return
 	}
-	set, ok := c.getSetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	set, ok := c.getSetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || set == nil {
 		return
 	}
@@ -318,7 +316,7 @@ func srandmemberWithCountCommand(c *client) {
 	}
 
 	// For CASE 3 and CASE 4 we need an auxiliary dictionary.
-	d := NewDict(c.tx, count, count) // TODO: use volatile dict
+	d := NewDict(count, count) // TODO: use volatile dict
 
 	if count*SRANDMEMBER_SUB_STRATEGY_MUL > size {
 		// CASE 3 : The number of elements inside the set is not greater than
@@ -332,12 +330,12 @@ func srandmemberWithCountCommand(c *client) {
 		si := setTypeInitIterator(set)
 		for ele := setTypeNext(si); ele != nil; ele = setTypeNext(si) {
 			key, _ := getString(ele)
-			d.set(c.tx, key, nil)
+			d.set(key, nil)
 		}
 		// Remove random elements to reach the right count.
 		for ; size > count; size-- {
 			de := d.randomKey()
-			d.delete(c.tx, de.key)
+			d.delete(de.key)
 		}
 	} else {
 		// CASE 4: We have a big set compared to the requested number of
@@ -350,7 +348,7 @@ func srandmemberWithCountCommand(c *client) {
 			// Try to add the object to the dictionary. If it already exists
 			// free it, otherwise increment the number of objects we have
 			// in the result dictionary.
-			if d.set(c.tx, key, nil) {
+			if d.set(key, nil) {
 				added++
 			}
 		}
@@ -378,12 +376,12 @@ func sinterGenericCommand(c *client, setkeys [][]byte, dstkey []byte) {
 	var alives []bool = nil
 	if dstkey == nil { // read only commands
 		keys = setkeys
-		alives = c.db.lockKeysRead(c.tx, keys, 1)
+		alives = c.db.lockKeysRead(keys, 1)
 	} else { // write commands.
 		// TODO: write locks will be automatically aquired for all keys even we
 		// only need read locks for source keys.
 		keys = append(setkeys, dstkey)
-		c.db.lockKeysWrite(c.tx, keys, 1)
+		c.db.lockKeysWrite(keys, 1)
 	}
 
 	sets := make([]interface{}, len(setkeys))
@@ -391,12 +389,12 @@ func sinterGenericCommand(c *client, setkeys [][]byte, dstkey []byte) {
 		if len(alives) > 0 && !alives[i] { // read expired
 			return
 		}
-		if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, key), nil); !ok {
+		if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(key), nil); !ok {
 			return
 		} else {
 			if set == nil {
 				if dstkey != nil {
-					c.db.delete(c.tx, dstkey)
+					c.db.delete(dstkey)
 					c.addReply(shared.czero)
 				} else {
 					c.addReply(shared.emptymultibulk)
@@ -421,7 +419,7 @@ func sinterGenericCommand(c *client, setkeys [][]byte, dstkey []byte) {
 	if dstkey == nil {
 		c.addDeferredMultiBulkLength()
 	} else {
-		dstset = setTypeCreate(c.tx, nil)
+		dstset = setTypeCreate(nil)
 	}
 
 	// Iterate all the elements of the first (smallest) set, and test
@@ -454,9 +452,9 @@ func sinterGenericCommand(c *client, setkeys [][]byte, dstkey []byte) {
 	}
 
 	if dstkey != nil {
-		c.db.delete(c.tx, dstkey)
+		c.db.delete(dstkey)
 		if setTypeSize(dstset) > 0 {
-			c.db.setKey(c.tx, shadowCopyToPmem(dstkey), dstset)
+			c.db.setKey(shadowCopyToPmem(dstkey), dstset)
 			c.addReplyLongLong(int64(setTypeSize(dstset)))
 		} else {
 			c.addReply(shared.czero)
@@ -489,12 +487,12 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 	if op != SET_OP_UNION_NOLOCK {
 		if dstkey == nil { // read only commands
 			keys = setkeys
-			alives = c.db.lockKeysRead(c.tx, keys, 1)
+			alives = c.db.lockKeysRead(keys, 1)
 		} else { // write commands.
 			// TODO: write locks will be automatically aquired for all keys even
 			// we only need read locks for source keys.
 			keys = append(setkeys, dstkey)
-			c.db.lockKeysWrite(c.tx, keys, 1)
+			c.db.lockKeysWrite(keys, 1)
 		}
 	}
 
@@ -504,7 +502,7 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 			continue
 		}
 		// TODO: distinguish lookupKeyRead/lookupKeyWrite
-		if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(c.tx, key), nil); !ok {
+		if set, ok := c.getSetOrReply(c.db.lookupKeyWrite(key), nil); !ok {
 			return
 		} else {
 			sets[i] = set
@@ -547,7 +545,7 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 	// We need a temp set object to store our union. If the dstkey
 	// is not NULL (that is, we are inside an SUNIONSTORE operation) then
 	// this set object will be the resulting object to set into the target key
-	dstset := setTypeCreate(c.tx, nil)
+	dstset := setTypeCreate(nil)
 	cardinality := 0
 
 	if op == SET_OP_UNION || op == SET_OP_UNION_NOLOCK {
@@ -636,9 +634,9 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 	} else {
 		// If we have a target key where to store the resulting set
 		// create this key with the result set inside
-		c.db.delete(c.tx, dstkey)
+		c.db.delete(dstkey)
 		if cardinality > 0 {
-			c.db.setKey(c.tx, shadowCopyToPmem(dstkey), dstset)
+			c.db.setKey(shadowCopyToPmem(dstkey), dstset)
 			c.addReplyLongLong(int64(cardinality))
 		} else {
 			c.addReply(shared.czero)
@@ -647,8 +645,8 @@ func sunionDiffGenericCommand(c *client, setkeys [][]byte, dstkey []byte, op int
 }
 
 func sismemberCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getSetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getSetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.czero)
 		if !ok || o == nil {
 			return
 		} else {
@@ -664,8 +662,8 @@ func sismemberCommand(c *client) {
 }
 
 func scardCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getSetOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getSetOrReply(c.db.lookupKeyRead(c.argv[1]), shared.czero)
 		if !ok || o == nil {
 			return
 		} else {
@@ -677,9 +675,9 @@ func scardCommand(c *client) {
 }
 
 // ============== settype helper functions ====================
-func setTypeCreate(tx transaction.TX, val interface{}) interface{} {
+func setTypeCreate(val interface{}) interface{} {
 	// TODO: create intset or hash based on val.
-	return NewDict(tx, 4, 4)
+	return NewDict(4, 4)
 }
 
 func setTypeAdd(c *client, skey []byte, subject interface{}, k interface{}) bool {
@@ -688,7 +686,7 @@ func setTypeAdd(c *client, skey []byte, subject interface{}, k interface{}) bool
 		key, _ := getString(k)
 		_, _, _, de := s.find(key)
 		if de == nil { // only add if not exist
-			s.set(c.tx, shadowCopyToPmem(key), nil)
+			s.set(shadowCopyToPmem(key), nil)
 			go hashTypeBgResize(c.db, skey)
 			return true
 		} else {
@@ -703,7 +701,7 @@ func setTypeRemove(c *client, skey []byte, subject interface{}, k interface{}) b
 	switch s := subject.(type) {
 	case *dict:
 		key, _ := getString(k)
-		de := s.delete(c.tx, key)
+		de := s.delete(key)
 		if de == nil {
 			return false
 		} else {
