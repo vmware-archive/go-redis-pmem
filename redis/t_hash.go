@@ -28,7 +28,7 @@ type hashTypeIterator struct {
 // ============== hash type commands ====================
 
 func hsetnxCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.argv[1])
 	o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 
 	if hashTypeExists(o, c.argv[2]) {
@@ -45,7 +45,7 @@ func hsetCommand(c *client) {
 		return
 	}
 
-	c.db.lockKeysWrite(c.tx, c.argv[1:], 2)
+	c.db.lockKeysWrite(c.argv[1:], 2)
 
 	o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 	if o == nil {
@@ -68,8 +68,8 @@ func hsetCommand(c *client) {
 }
 
 func hgetCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil); ok {
+	if c.db.lockKeyRead(c.argv[1]) {
+		if o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.argv[1]), nil); ok {
 			c.addHashFieldToReply(o, c.argv[2])
 		}
 	} else { // expired
@@ -80,8 +80,8 @@ func hgetCommand(c *client) {
 func hmgetCommand(c *client) {
 	var o interface{}
 	var ok bool
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil); !ok {
+	if c.db.lockKeyRead(c.argv[1]) {
+		if o, ok = c.getHashOrReply(c.db.lookupKeyRead(c.argv[1]), nil); !ok {
 			return
 		}
 	}
@@ -94,14 +94,14 @@ func hmgetCommand(c *client) {
 func hdelCommand(c *client) {
 	var deleted int64
 	removed := false
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero)
 	if ok && o != nil {
 		for i := 2; i < c.argc; i++ {
 			if hashTypeDelete(c, o, c.argv[i]) {
 				deleted++
 				if hashTypeLength(o) == 0 {
-					c.db.delete(c.tx, c.argv[1])
+					c.db.delete(c.argv[1])
 					removed = true
 					break
 				}
@@ -117,8 +117,8 @@ func hdelCommand(c *client) {
 }
 
 func hlenCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero)
 		if ok && o != nil {
 			c.addReplyLongLong(int64(hashTypeLength(o)))
 		}
@@ -128,8 +128,8 @@ func hlenCommand(c *client) {
 }
 
 func hstrlenCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.argv[1]), shared.czero)
 		if ok && o != nil {
 			c.addReplyLongLong(int64(hashTypeGetValueLength(o, c.argv[2])))
 		}
@@ -151,8 +151,8 @@ func hgetallCommand(c *client) {
 }
 
 func genericHgetallCommand(c *client, getK, getV bool) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 		if ok && o != nil {
 			multiplier := 0
 			if getK {
@@ -175,8 +175,8 @@ func genericHgetallCommand(c *client, getK, getV bool) {
 }
 
 func hexistsCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.czero)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getHashOrReply(c.db.lookupKeyRead(c.argv[1]), shared.czero)
 		if ok && o != nil {
 			if hashTypeExists(o, c.argv[2]) {
 				c.addReply(shared.cone)
@@ -191,7 +191,7 @@ func hexistsCommand(c *client) {
 
 func hincrbyCommand(c *client) {
 	if incr, ok := c.getLongLongOrReply(c.argv[3], nil); ok {
-		c.db.lockKeyWrite(c.tx, c.argv[1])
+		c.db.lockKeyWrite(c.argv[1])
 		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 
 		if v, ok := c.getLongLongOrReply(hashTypeGetValue(o, c.argv[2]),
@@ -210,7 +210,7 @@ func hincrbyCommand(c *client) {
 
 func hincrbyfloatCommand(c *client) {
 	if incr, ok := c.getLongDoubleOrReply(c.argv[3], nil); ok {
-		c.db.lockKeyWrite(c.tx, c.argv[1])
+		c.db.lockKeyWrite(c.argv[1])
 		o := hashTypeLookupWriteOrCreate(c, c.argv[1])
 
 		if v, ok := c.getLongDoubleOrReply(hashTypeGetValue(o, c.argv[2]),
@@ -229,11 +229,11 @@ func hincrbyfloatCommand(c *client) {
 // ============== helper functions ====================
 
 func hashTypeLookupWriteOrCreate(c *client, key []byte) interface{} {
-	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(c.tx, key), nil)
+	o, ok := c.getHashOrReply(c.db.lookupKeyWrite(key), nil)
 	if ok {
 		if o == nil {
-			o = NewDict(c.tx, 4, 4) // implicitly convert to interface
-			c.db.setKey(c.tx, shadowCopyToPmem(key), o)
+			o = NewDict(4, 4) // implicitly convert to interface
+			c.db.setKey(shadowCopyToPmem(key), o)
 		}
 	}
 	return o
@@ -258,11 +258,12 @@ func hashTypeSet(c *client, o interface{}, field []byte, value interface{}) bool
 	case *dict:
 		_, _, _, de := d.find(field)
 		if de != nil {
-			c.tx.Log(&de.value)
+			txn("undo") {
 			de.value = value
 			update = true
+			}
 		} else {
-			d.set(c.tx, field, value)
+			d.set(field, value)
 			go hashTypeBgResize(c.db, c.argv[1])
 		}
 	default:
@@ -275,7 +276,7 @@ func hashTypeDelete(c *client, o interface{}, field []byte) bool {
 	deleted := false
 	switch d := o.(type) {
 	case *dict:
-		if d.delete(c.tx, field) != nil {
+		if d.delete(field) != nil {
 			deleted = true
 			go hashTypeBgResize(c.db, c.argv[1])
 		}
@@ -294,13 +295,12 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 	if p > 5 {
 		return
 	}
-	tx := transaction.NewUndoTx()
+	txn("undo") {
 	rehash := true
 	for rehash {
 		// need to lock and get kv pair in every transaction
-		tx.Begin()
-		db.lockKeyWrite(tx, key)
-		o := db.lookupKeyWrite(tx, key)
+		db.lockKeyWrite(key)
+		o := db.lookupKeyWrite(key)
 		var d *dict
 		switch v := o.(type) {
 		case *dict:
@@ -312,22 +312,21 @@ func hashTypeBgResize(db *redisDb, key []byte) {
 		}
 		if d != nil {
 			if d.rehashIdx == -1 {
-				_, _, size1 := d.resizeIfNeeded(tx)
+				_, _, size1 := d.resizeIfNeeded()
 				if size1 == 0 {
 					rehash = false
 				} else {
 					//println("Rehash hash key", string(key), "to size", size1)
 				}
 			} else if d.rehashIdx == -2 {
-				d.rehashSwap(tx)
+				d.rehashSwap()
 				rehash = false
 			} else {
-				d.rehashStep(tx)
+				d.rehashStep()
 			}
 		}
-		tx.End()
 	}
-	transaction.Release(tx)
+	}
 }
 
 // need to check o != nil outside

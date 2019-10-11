@@ -42,60 +42,63 @@ var (
 	optimization_level [5]int = [...]int{4096, 8192, 16384, 32768, 65536}
 )
 
-func quicklistCreate(tx transaction.TX) *quicklist {
+func quicklistCreate() *quicklist {
 	ql := pnew(quicklist)
-	tx.Log(ql)
+	txn("undo") {
 	ql.fill = -2
+	}
 	return ql
 }
 
-func quicklistNew(tx transaction.TX, fill, compress int) *quicklist {
-	ql := quicklistCreate(tx)
-	ql.SetOptions(tx, fill, compress)
+func quicklistNew(fill, compress int) *quicklist {
+	ql := quicklistCreate()
+	ql.SetOptions(fill, compress)
 	return ql
 }
 
-func quicklistCreateFromZiplist(tx transaction.TX, fill, compress int, zl *ziplist) *quicklist {
-	ql := quicklistNew(tx, fill, compress)
-	ql.AppendValuesFromZiplist(tx, zl)
+func quicklistCreateFromZiplist(fill, compress int, zl *ziplist) *quicklist {
+	ql := quicklistNew(fill, compress)
+	ql.AppendValuesFromZiplist(zl)
 	return ql
 }
 
-func quicklistCreateNode(tx transaction.TX) *quicklistNode {
+func quicklistCreateNode() *quicklistNode {
 	node := pnew(quicklistNode)
-	tx.Log(node)
-	node.zl = ziplistNew(tx)
+	txn("undo") {
+	node.zl = ziplistNew()
+	}
 	return node
 }
 
-func (ql *quicklist) SetOptions(tx transaction.TX, fill, compress int) {
-	ql.SetFill(tx, fill)
-	ql.SetCompressDepth(tx, compress)
+func (ql *quicklist) SetOptions(fill, compress int) {
+	ql.SetFill(fill)
+	ql.SetCompressDepth(compress)
 }
 
-func (ql *quicklist) SetFill(tx transaction.TX, fill int) {
-	tx.Log(&ql.fill)
+func (ql *quicklist) SetFill( fill int) {
 	if fill > 1<<15 {
 		fill = 1 << 15
 	} else if fill < -5 {
 		fill = -5
 	}
+	txn("undo") {
 	ql.fill = fill
+	}
 }
 
-func (ql *quicklist) SetCompressDepth(tx transaction.TX, compress int) {
+func (ql *quicklist) SetCompressDepth(compress int) {
 	// TODO
 }
 
-func (ql *quicklist) Compress(tx transaction.TX, node *quicklistNode) {
+func (ql *quicklist) Compress(node *quicklistNode) {
 	// TODO
 }
 
-func (ql *quicklist) AppendValuesFromZiplist(tx transaction.TX, zl *ziplist) {
+func (ql *quicklist) AppendValuesFromZiplist(zl *ziplist) {
 	pos := 0
 	val := zl.Get(pos)
 	for val != nil {
-		ql.PushTail(tx, val)
+		ql.PushTail(val)
 		pos = zl.Next(pos)
 		val = zl.Get(pos)
 	}
@@ -177,10 +180,10 @@ func (iter *quicklistIter) Next(entry *quicklistEntry) bool {
 	}
 }
 
-func (iter *quicklistIter) DelEntry(tx transaction.TX, entry *quicklistEntry) {
+func (iter *quicklistIter) DelEntry(entry *quicklistEntry) {
 	prev := entry.node.prev
 	next := entry.node.next
-	deleteNode := entry.ql.delIndex(tx, entry.node, entry.zi)
+	deleteNode := entry.ql.delIndex(entry.node, entry.zi)
 	iter.zi = -1
 	if deleteNode {
 		if iter.startHead {
@@ -234,52 +237,53 @@ func (ql *quicklist) Index(idx int, entry *quicklistEntry) bool {
 	return true
 }
 
-func (ql *quicklist) Push(tx transaction.TX, val interface{}, head bool) {
+func (ql *quicklist) Push(val interface{}, head bool) {
 	if head {
-		ql.PushHead(tx, val)
+		ql.PushHead(val)
 	} else {
-		ql.PushTail(tx, val)
+		ql.PushTail(val)
 	}
 }
 
-func (ql *quicklist) PushHead(tx transaction.TX, val interface{}) bool {
-	tx.Log(ql)
+func (ql *quicklist) PushHead(val interface{}) bool {
 	origHead := ql.head
+	txn("undo") {
 	if origHead.allowInsert(ql.fill, val) {
-		origHead.zl.Push(tx, val, true)
+		origHead.zl.Push(val, true)
 	} else {
-		node := quicklistCreateNode(tx)
-		node.zl.Push(tx, val, true)
-		ql.insertNodeBefore(tx, ql.head, node)
+		node := quicklistCreateNode()
+		node.zl.Push(val, true)
+		ql.insertNodeBefore(ql.head, node)
 	}
 	ql.count++
+	}
 	return origHead != ql.head
 }
 
-func (ql *quicklist) PushTail(tx transaction.TX, val interface{}) bool {
-	tx.Log(ql)
+func (ql *quicklist) PushTail(val interface{}) bool {
 	origTail := ql.tail
+	txn("undo") {
 	if origTail.allowInsert(ql.fill, val) {
-		origTail.zl.Push(tx, val, false)
+		origTail.zl.Push(val, false)
 	} else {
-		node := quicklistCreateNode(tx)
-		node.zl.Push(tx, val, false)
-		ql.insertNodeAfter(tx, ql.tail, node)
+		node := quicklistCreateNode()
+		node.zl.Push(val, false)
+		ql.insertNodeAfter(ql.tail, node)
 	}
 	ql.count++
+	}
 	return origTail != ql.tail
 }
 
-func (ql *quicklist) InsertBefore(tx transaction.TX, entry *quicklistEntry, val interface{}) {
-	ql.insert(tx, entry, val, false)
+func (ql *quicklist) InsertBefore(entry *quicklistEntry, val interface{}) {
+	ql.insert(entry, val, false)
 }
 
-func (ql *quicklist) InsertAfter(tx transaction.TX, entry *quicklistEntry, val interface{}) {
-	ql.insert(tx, entry, val, true)
+func (ql *quicklist) InsertAfter(entry *quicklistEntry, val interface{}) {
+	ql.insert(entry, val, true)
 }
 
-func (ql *quicklist) Pop(tx transaction.TX, head bool) interface{} {
-	tx.Log(ql)
+func (ql *quicklist) Pop(head bool) interface{} {
 	if ql.count == 0 {
 		return nil
 	}
@@ -298,23 +302,23 @@ func (ql *quicklist) Pop(tx transaction.TX, head bool) interface{} {
 	pos := node.zl.Index(idx)
 	val := node.zl.Get(pos)
 	if val != nil {
-		ql.delIndex(tx, node, pos)
+		ql.delIndex(node, pos)
 	}
 	return val
 }
 
-func (ql *quicklist) ReplaceAtIndex(tx transaction.TX, idx int, val interface{}) bool {
+func (ql *quicklist) ReplaceAtIndex(idx int, val interface{}) bool {
 	var entry quicklistEntry
 	if ql.Index(idx, &entry) {
-		entry.node.zl.Delete(tx, entry.zi)
-		entry.node.zl.insert(tx, entry.zi, val)
+		entry.node.zl.Delete(entry.zi)
+		entry.node.zl.insert(entry.zi, val)
 		return true
 	} else {
 		return false
 	}
 }
 
-func (ql *quicklist) DelRange(tx transaction.TX, start, count int) int {
+func (ql *quicklist) DelRange(start, count int) int {
 	if count <= 0 || start > ql.count || start < -ql.count {
 		return 0
 	}
@@ -331,7 +335,7 @@ func (ql *quicklist) DelRange(tx transaction.TX, start, count int) int {
 	}
 	node := entry.node
 	toDel := extent
-	tx.Log(ql)
+	txn("undo") {
 	for extent > 0 {
 		next := node.next
 		del := 0
@@ -352,39 +356,38 @@ func (ql *quicklist) DelRange(tx transaction.TX, start, count int) int {
 		}
 
 		if deleteNode {
-			ql.delNode(tx, node)
+			ql.delNode(node)
 		} else {
-			node.zl.DeleteRange(tx, entry.offset, uint(del))
+			node.zl.DeleteRange(entry.offset, uint(del))
 			ql.count -= del
 			if node.zl.Len() == 0 {
-				ql.delNode(tx, node)
+				ql.delNode(node)
 			}
 		}
 		extent -= del
 		node = next
 		entry.offset = 0
 	}
+	}
 	return toDel
 }
 
-func (ql *quicklist) insertNodeBefore(tx transaction.TX, oldNode, newNode *quicklistNode) {
-	ql.insertNode(tx, oldNode, newNode, false)
+func (ql *quicklist) insertNodeBefore(oldNode, newNode *quicklistNode) {
+	ql.insertNode(oldNode, newNode, false)
 }
 
-func (ql *quicklist) insertNodeAfter(tx transaction.TX, oldNode, newNode *quicklistNode) {
-	ql.insertNode(tx, oldNode, newNode, true)
+func (ql *quicklist) insertNodeAfter(oldNode, newNode *quicklistNode) {
+	ql.insertNode(oldNode, newNode, true)
 }
 
 // ql should be logged outside this call.
-func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNode, after bool) {
-	tx.Log(newNode)
+func (ql *quicklist) insertNode(oldNode, newNode *quicklistNode, after bool) {
+	txn("undo") {
 	if after {
 		newNode.prev = oldNode
 		if oldNode != nil {
-			tx.Log(oldNode)
 			newNode.next = oldNode.next
 			if oldNode.next != nil {
-				tx.Log(oldNode.next)
 				oldNode.next.prev = newNode
 			}
 			oldNode.next = newNode
@@ -395,10 +398,8 @@ func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNo
 	} else {
 		newNode.next = oldNode
 		if oldNode != nil {
-			tx.Log(oldNode)
 			newNode.prev = oldNode.prev
 			if oldNode.prev != nil {
-				tx.Log(oldNode.prev)
 				oldNode.prev.next = newNode
 			}
 			oldNode.prev = newNode
@@ -412,19 +413,21 @@ func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNo
 		ql.tail = newNode
 	}
 	if oldNode != nil {
-		ql.Compress(tx, oldNode)
+		ql.Compress(oldNode)
 	}
 	ql.length++
+	}
 }
 
-func (ql *quicklist) insert(tx transaction.TX, entry *quicklistEntry, val interface{}, after bool) {
-	tx.Log(ql)
+func (ql *quicklist) insert(entry *quicklistEntry, val interface{}, after bool) {
 	node := entry.node
 	if node == nil {
-		newNode := quicklistCreateNode(tx)
-		newNode.zl.Push(tx, val, true)
-		ql.insertNode(tx, nil, newNode, false)
+		txn("undo") {
+		newNode := quicklistCreateNode()
+		newNode.zl.Push(val, true)
+		ql.insertNode(nil, newNode, false)
 		ql.count++
+		}
 		return
 	}
 	full := false
@@ -432,6 +435,7 @@ func (ql *quicklist) insert(tx transaction.TX, entry *quicklistEntry, val interf
 	atHead := false
 	fullNext := false
 	fullPrev := false
+	txn("undo") {
 	if !node.allowInsert(ql.fill, val) {
 		full = true
 	}
@@ -452,40 +456,40 @@ func (ql *quicklist) insert(tx transaction.TX, entry *quicklistEntry, val interf
 		// insert/append to current node after entry
 		next := node.zl.Next(entry.zi)
 		if next == -1 {
-			node.zl.Push(tx, val, false)
+			node.zl.Push(val, false)
 		} else {
-			node.zl.insert(tx, next, val)
+			node.zl.insert(next, val)
 		}
 	} else if !full && !after {
 		// insert to current node before entry
-		node.zl.insert(tx, entry.zi, val)
+		node.zl.insert(entry.zi, val)
 	} else if full && atTail && node.next != nil && !fullNext {
 		// insert to head of next node
 		newNode := node.next
-		newNode.zl.Push(tx, val, true)
+		newNode.zl.Push(val, true)
 	} else if full && atHead && node.prev != nil && !fullPrev {
 		// append to tail of prev node
 		newNode := node.prev
-		newNode.zl.Push(tx, val, false)
+		newNode.zl.Push(val, false)
 	} else if full && ((atTail && node.next != nil && fullNext) || (atHead && node.prev != nil && fullPrev)) {
 		// create a new node
-		newNode := quicklistCreateNode(tx)
-		tx.Log(newNode)
-		newNode.zl = ziplistNew(tx)
-		newNode.zl.Push(tx, val, false)
-		ql.insertNode(tx, node, newNode, after)
+		newNode := quicklistCreateNode()
+		newNode.zl = ziplistNew()
+		newNode.zl.Push(val, false)
+		ql.insertNode(node, newNode, after)
 	} else if full {
 		// need to split full node
-		newNode := node.split(tx, entry.offset, after)
+		newNode := node.split(entry.offset, after)
 		if after {
-			newNode.zl.Push(tx, val, true)
+			newNode.zl.Push(val, true)
 		} else {
-			newNode.zl.Push(tx, val, false)
+			newNode.zl.Push(val, false)
 		}
-		ql.insertNode(tx, node, newNode, after)
-		ql.mergeNodes(tx, node)
+		ql.insertNode(node, newNode, after)
+		ql.mergeNodes(node)
 	}
 	ql.count++
+	}
 }
 
 func (node *quicklistNode) allowInsert(fill int, val interface{}) bool {
@@ -524,25 +528,26 @@ func (node *quicklistNode) allowInsert(fill int, val interface{}) bool {
 	}
 }
 
-func (node *quicklistNode) split(tx transaction.TX, offset int, after bool) *quicklistNode {
-	newNode := quicklistCreateNode(tx)
+func (node *quicklistNode) split(offset int, after bool) *quicklistNode {
+	newNode := quicklistCreateNode()
 	// copy the whole zl into new node
-	tx.Log(newNode)
-	newNode.zl = node.zl.deepCopy(tx)
+	txn("undo") {
+	newNode.zl = node.zl.deepCopy()
 
 	// remove dup entries in two nodes
 	if after {
-		node.zl.DeleteRange(tx, offset+1, node.zl.entries)
-		newNode.zl.DeleteRange(tx, 0, uint(offset)+1)
+		node.zl.DeleteRange(offset+1, node.zl.entries)
+		newNode.zl.DeleteRange(0, uint(offset)+1)
 	} else {
-		node.zl.DeleteRange(tx, 0, uint(offset))
-		newNode.zl.DeleteRange(tx, offset, newNode.zl.entries)
+		node.zl.DeleteRange(0, uint(offset))
+		newNode.zl.DeleteRange(offset, newNode.zl.entries)
+	}
 	}
 	return newNode
 }
 
 // ql should be logged outside the call.
-func (ql *quicklist) mergeNodes(tx transaction.TX, center *quicklistNode) {
+func (ql *quicklist) mergeNodes(center *quicklistNode) {
 	fill := ql.fill
 	var prev, prevPrev, next, nextNext, target *quicklistNode
 	if center.prev != nil {
@@ -560,21 +565,21 @@ func (ql *quicklist) mergeNodes(tx transaction.TX, center *quicklistNode) {
 	}
 
 	if ql.allowNodeMerge(prev, prevPrev, fill) {
-		ql.ziplistMerge(tx, prevPrev, prev)
+		ql.ziplistMerge(prevPrev, prev)
 	}
 
 	if ql.allowNodeMerge(next, nextNext, fill) {
-		ql.ziplistMerge(tx, next, nextNext)
+		ql.ziplistMerge(next, nextNext)
 	}
 
 	if ql.allowNodeMerge(center, center.prev, fill) {
-		target = ql.ziplistMerge(tx, center.prev, center)
+		target = ql.ziplistMerge(center.prev, center)
 	} else {
 		target = center
 	}
 
 	if ql.allowNodeMerge(target, target.next, fill) {
-		ql.ziplistMerge(tx, target, target.next)
+		ql.ziplistMerge(target, target.next)
 	}
 }
 
@@ -595,11 +600,12 @@ func (ql *quicklist) allowNodeMerge(a, b *quicklistNode, fill int) bool {
 }
 
 // ql should be logged outside the call.
-func (ql *quicklist) ziplistMerge(tx transaction.TX, a, b *quicklistNode) *quicklistNode {
-	a.zl.Merge(tx, b.zl)
-	tx.Log(b.zl)
+func (ql *quicklist) ziplistMerge(a, b *quicklistNode) *quicklistNode {
+	txn("undo") {
+	a.zl.Merge(b.zl)
 	b.zl.entries = 0
-	ql.delNode(tx, b)
+	ql.delNode(b)
+	}
 	return a
 }
 
@@ -620,26 +626,26 @@ func nodeSizeMeetOptimizationRequirement(sz, fill int) bool {
 }
 
 // ql should be logged outside the call.
-func (ql *quicklist) delIndex(tx transaction.TX, node *quicklistNode, pos int) bool {
-	tx.Log(node)
+func (ql *quicklist) delIndex(node *quicklistNode, pos int) bool {
 	deleteNode := false
-	node.zl.Delete(tx, pos)
+	txn("undo") {
+	node.zl.Delete(pos)
 	if node.zl.entries == 0 {
-		ql.delNode(tx, node)
+		ql.delNode(node)
 		deleteNode = true
 	}
 	ql.count--
+	}
 	return deleteNode
 }
 
 // ql should be logged outside this call.
-func (ql *quicklist) delNode(tx transaction.TX, node *quicklistNode) {
+func (ql *quicklist) delNode(node *quicklistNode) {
+	txn("undo") {
 	if node.next != nil {
-		tx.Log(node.next)
 		node.next.prev = node.prev
 	}
 	if node.prev != nil {
-		tx.Log(node.prev)
 		node.prev.next = node.next
 	}
 
@@ -650,9 +656,10 @@ func (ql *quicklist) delNode(tx transaction.TX, node *quicklistNode) {
 		ql.head = node.next
 	}
 
-	ql.Compress(tx, nil)
+	ql.Compress(nil)
 	ql.count -= int(node.zl.entries)
 	ql.length--
+	}
 }
 
 func (ql *quicklist) print() {

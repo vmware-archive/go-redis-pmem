@@ -7,8 +7,6 @@ package redis
 
 import (
 	"bytes"
-
-	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 type (
@@ -27,14 +25,14 @@ type (
 // ============== list type commands ====================
 func pushGenericCommand(c *client, head bool) {
 	pushed := 0
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	if o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); ok {
+	c.db.lockKeyWrite(c.argv[1])
+	if o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), nil); ok {
 		for j := 2; j < c.argc; j++ {
 			if o == nil {
-				o = quicklistCreate(c.tx) // TODO: set list option
-				c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), o)
+				o = quicklistCreate() // TODO: set list option
+				c.db.setKey(shadowCopyToPmem(c.argv[1]), o)
 			}
-			listTypePush(c.tx, o, c.argv[j], head)
+			listTypePush(o, c.argv[j], head)
 			pushed++
 		}
 		c.addReplyLongLong(listTypeLength(o))
@@ -50,14 +48,14 @@ func rpushCommand(c *client) {
 }
 
 func pushxGenericCommand(c *client, head bool) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero)
 	if !ok || o == nil {
 		return
 	}
 	pushed := 0
 	for j := 2; j < c.argc; j++ {
-		listTypePush(c.tx, o, c.argv[j], head)
+		listTypePush(o, c.argv[j], head)
 		pushed++
 	}
 	c.addReplyLongLong(listTypeLength(o))
@@ -82,8 +80,8 @@ func linsertCommand(c *client) {
 		return
 	}
 
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.czero)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.czero)
 	if !ok || o == nil {
 		return
 	}
@@ -93,7 +91,7 @@ func linsertCommand(c *client) {
 	iter := listTypeInitIterator(o, 0, true)
 	for listTypeNext(iter, &entry) {
 		if listTypeEqual(&entry, c.argv[3]) {
-			listTypeInsert(c.tx, &entry, c.argv[4], after)
+			listTypeInsert(&entry, c.argv[4], after)
 			inserted = true
 			break
 		}
@@ -106,8 +104,8 @@ func linsertCommand(c *client) {
 }
 
 func llenCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if o, ok := c.getListOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), nil); ok {
+	if c.db.lockKeyRead(c.argv[1]) {
+		if o, ok := c.getListOrReply(c.db.lookupKeyRead(c.argv[1]), nil); ok {
 			c.addReplyLongLong(listTypeLength(o))
 		}
 	} else {
@@ -116,8 +114,8 @@ func llenCommand(c *client) {
 }
 
 func lindexCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		o, ok := c.getListOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk)
+	if c.db.lockKeyRead(c.argv[1]) {
+		o, ok := c.getListOrReply(c.db.lookupKeyRead(c.argv[1]), shared.nullbulk)
 		if !ok || o == nil {
 			return
 		}
@@ -143,8 +141,8 @@ func lindexCommand(c *client) {
 }
 
 func lsetCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.nokeyerr)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.nokeyerr)
 	if !ok || o == nil {
 		return
 	}
@@ -154,7 +152,7 @@ func lsetCommand(c *client) {
 	}
 	switch ql := o.(type) {
 	case *quicklist:
-		replaced := ql.ReplaceAtIndex(c.tx, int(index), c.argv[3])
+		replaced := ql.ReplaceAtIndex(int(index), c.argv[3])
 		if !replaced {
 			c.addReply(shared.outofrangeerr)
 		} else {
@@ -166,20 +164,20 @@ func lsetCommand(c *client) {
 }
 
 func popGenericCommand(c *client, head bool) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.nullbulk)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.nullbulk)
 	if !ok || o == nil {
 		return
 	}
 
-	val := listTypePop(c.tx, o, head)
+	val := listTypePop(o, head)
 	if val == nil {
 		c.addReply(shared.nullbulk)
 	} else {
 		s, _ := getString(val)
 		c.addReplyBulk(s)
 		if listTypeLength(o) == 0 {
-			c.db.delete(c.tx, c.argv[1])
+			c.db.delete(c.argv[1])
 		}
 	}
 }
@@ -201,11 +199,11 @@ func lrangeCommand(c *client) {
 	if end, ok = c.getLongLongOrReply(c.argv[3], nil); !ok {
 		return
 	}
-	if !c.db.lockKeyRead(c.tx, c.argv[1]) {
+	if !c.db.lockKeyRead(c.argv[1]) {
 		c.addReply(shared.emptymultibulk)
 		return
 	}
-	o, ok := c.getListOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptymultibulk)
+	o, ok := c.getListOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptymultibulk)
 	if !ok || o == nil {
 		return
 	}
@@ -255,8 +253,8 @@ func ltrimCommand(c *client) {
 	if end, ok = c.getLongLongOrReply(c.argv[3], nil); !ok {
 		return
 	}
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.ok)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.ok)
 	if !ok || o == nil {
 		return
 	}
@@ -284,8 +282,8 @@ func ltrimCommand(c *client) {
 	}
 	switch l := o.(type) {
 	case *quicklist:
-		l.DelRange(c.tx, 0, int(ltrim))
-		l.DelRange(c.tx, int(-rtrim), int(rtrim))
+		l.DelRange(0, int(ltrim))
+		l.DelRange(int(-rtrim), int(rtrim))
 	default:
 		panic("Unknown list encoding")
 	}
@@ -303,8 +301,8 @@ func lremCommand(c *client) {
 	if toremove, ok = c.getLongLongOrReply(c.argv[2], nil); !ok {
 		return
 	}
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.ok)
+	c.db.lockKeyWrite(c.argv[1])
+	o, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.ok)
 	if !ok || o == nil {
 		return
 	}
@@ -317,7 +315,7 @@ func lremCommand(c *client) {
 
 	for listTypeNext(li, &entry) {
 		if listTypeEqual(&entry, c.argv[3]) {
-			listTypeDelete(c.tx, li, &entry)
+			listTypeDelete(li, &entry)
 			removed++
 			if toremove > 0 && toremove == removed {
 				break
@@ -325,37 +323,37 @@ func lremCommand(c *client) {
 		}
 	}
 	if listTypeLength(o) == 0 {
-		c.db.delete(c.tx, c.argv[1])
+		c.db.delete(c.argv[1])
 	}
 	c.addReplyLongLong(removed)
 }
 
 func rpoplpushCommand(c *client) {
-	c.db.lockKeysWrite(c.tx, c.argv[1:3], 1)
-	sobj, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), shared.nullbulk)
+	c.db.lockKeysWrite(c.argv[1:3], 1)
+	sobj, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[1]), shared.nullbulk)
 	if !ok || sobj == nil {
 		return
 	}
 	if listTypeLength(sobj) == 0 {
 		c.addReply(shared.nullbulk)
 	} else {
-		dobj, ok := c.getListOrReply(c.db.lookupKeyWrite(c.tx, c.argv[2]), nil)
+		dobj, ok := c.getListOrReply(c.db.lookupKeyWrite(c.argv[2]), nil)
 		if !ok {
 			return
 		}
-		value := listTypePop(c.tx, sobj, false)
+		value := listTypePop(sobj, false)
 		rpoplpushHandlePush(c, c.argv[2], dobj, value)
 		if listTypeLength(sobj) == 0 {
-			c.db.delete(c.tx, c.argv[1])
+			c.db.delete(c.argv[1])
 		}
 	}
 }
 
 // ============== helper functions ====================
-func listTypePush(tx transaction.TX, o, val interface{}, head bool) {
+func listTypePush(o, val interface{}, head bool) {
 	switch l := o.(type) {
 	case *quicklist:
-		l.Push(tx, val, head)
+		l.Push(val, head)
 	default:
 		panic("Unknown list encoding")
 	}
@@ -393,33 +391,33 @@ func listTypeEqual(entry *listTypeEntry, val interface{}) bool {
 	return entry.entry.Compare(val)
 }
 
-func listTypeInsert(tx transaction.TX, entry *listTypeEntry, val interface{}, after bool) {
+func listTypeInsert(entry *listTypeEntry, val interface{}, after bool) {
 	if after {
-		entry.entry.ql.InsertAfter(tx, &entry.entry, val)
+		entry.entry.ql.InsertAfter(&entry.entry, val)
 	} else {
-		entry.entry.ql.InsertBefore(tx, &entry.entry, val)
+		entry.entry.ql.InsertBefore(&entry.entry, val)
 	}
 }
 
-func listTypePop(tx transaction.TX, o interface{}, head bool) interface{} {
+func listTypePop(o interface{}, head bool) interface{} {
 	switch l := o.(type) {
 	case *quicklist:
-		return l.Pop(tx, head)
+		return l.Pop(head)
 	default:
 		panic("Unknown list encoding")
 	}
 }
 
-func listTypeDelete(tx transaction.TX, li *listTypeIterator, entry *listTypeEntry) {
-	li.iter.DelEntry(tx, &entry.entry)
+func listTypeDelete(li *listTypeIterator, entry *listTypeEntry) {
+	li.iter.DelEntry(&entry.entry)
 }
 
 func rpoplpushHandlePush(c *client, dstkey []byte, dstobj, value interface{}) {
 	if dstobj == nil {
-		dstobj = quicklistCreate(c.tx)
-		c.db.setKey(c.tx, shadowCopyToPmem(dstkey), dstobj)
+		dstobj = quicklistCreate()
+		c.db.setKey(shadowCopyToPmem(dstkey), dstobj)
 	}
-	listTypePush(c.tx, dstobj, value, true)
+	listTypePush(dstobj, value, true)
 	s, _ := getString(value)
 	c.addReplyBulk(s)
 }

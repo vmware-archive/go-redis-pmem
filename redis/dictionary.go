@@ -64,11 +64,9 @@ type (
 	}
 )
 
-func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
+func NewDict(initSize, bucketPerShard int) *dict {
 	d := pnew(dict)
-
-	tx.Begin()
-	tx.Log(d)
+	txn("undo") {
 	d.initSize = nextPower(1, initSize)
 	// TODO: add -1 value to indicate ALWAYS set bucketPerShard to dict size.
 	if bucketPerShard >= initSize || bucketPerShard <= 0 {
@@ -78,15 +76,15 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	}
 	d.lock = new(sync.RWMutex)
 	d.rehashLock = new(sync.RWMutex)
-	d.resetTable(tx, 0, d.initSize)
-	d.resetTable(tx, 1, 0)
+	d.resetTable(0, d.initSize)
+	d.resetTable(1, 0)
 	d.rehashIdx = -1
-	tx.End()
+	}
 	return d
 }
 
-func (d *dict) resetTable(tx transaction.TX, i int, s int) {
-	tx.Log(d.tab[i:])
+func (d *dict) resetTable(i int, s int) {
+	txn("undo") {
 	if s == 0 {
 		d.tab[i].bucketlock = nil
 		d.tab[i].bucket = nil
@@ -98,6 +96,7 @@ func (d *dict) resetTable(tx transaction.TX, i int, s int) {
 		d.tab[i].used = pmake([]int, shards)
 	}
 	d.tab[i].mask = s - 1
+	}
 }
 
 func inPMem(a unsafe.Pointer) {
@@ -109,15 +108,15 @@ func inPMem(a unsafe.Pointer) {
 	}
 }
 
-func (d *dict) swizzle(tx transaction.TX) {
+func (d *dict) swizzle() {
 	inPMem(unsafe.Pointer(d))
 	d.lock = new(sync.RWMutex)
 	d.rehashLock = new(sync.RWMutex)
-	d.tab[0].swizzle(tx, d)
-	d.tab[1].swizzle(tx, d)
+	d.tab[0].swizzle(d)
+	d.tab[1].swizzle(d)
 }
 
-func (t *table) swizzle(tx transaction.TX, d *dict) {
+func (t *table) swizzle(d *dict) {
 	s := t.mask + 1
 	if s > 0 {
 		shards := d.shard(s)
@@ -134,14 +133,14 @@ func (t *table) swizzle(tx transaction.TX, d *dict) {
 			for e != nil {
 				x++
 				//println(x, e, e.key, e.value, e.next)
-				e.swizzle(tx)
+				e.swizzle()
 				e = e.next
 			}
 		}
 	}
 }
 
-func (e *entry) swizzle(tx transaction.TX) {
+func (e *entry) swizzle() {
 	inPMem(unsafe.Pointer(e))
 	if len(e.key) > 0 {
 		inPMem(unsafe.Pointer(&(e.key[0])))
@@ -157,9 +156,9 @@ func (e *entry) swizzle(tx transaction.TX) {
 			inPMem(unsafe.Pointer(&(*v)[0]))
 		}
 	case *dict:
-		v.swizzle(tx)
+		v.swizzle()
 	case *zset:
-		v.swizzle(tx)
+		v.swizzle()
 	case int64:
 	case float64:
 	case nil:
@@ -200,61 +199,55 @@ func memtierhash(key []byte) int {
 
 // rehash and resize
 func (d *dict) Cron(sleep time.Duration) {
-	tx := transaction.NewUndoTx()
 	var used, size0, size1 int
 	for {
 		if size1 == 0 {
 			time.Sleep(sleep) // reduce cpu consumption and lock contention
 		}
-		tx.Begin()
-		tx.WLock(d.rehashLock)
+		txn("undo") {
+		d.rehashLock.Lock()
 		if d.rehashIdx == -1 {
 			// check whether need to resize table when rehashIdx < 0
-			tx.WLock(d.lock)
-			used, size0, size1 = d.resizeIfNeeded(tx)
+			d.lock.Lock()
+			used, size0, size1 = d.resizeIfNeeded()
 			if size1 > 0 {
 				fmt.Println("Dictionary used / size:", used, "/", size0,
 					" ,Resize table to: ", size1)
 			}
 		} else if d.rehashIdx == -2 {
-			tx.WLock(d.lock)
-			d.rehashSwap(tx)
+			d.lock.Lock()
+			d.rehashSwap()
 			size1 = 0
 		} else {
-			tx.RLock(d.lock)
-			d.rehashStep(tx)
+			d.lock.RLock()
+			d.rehashStep()
 		}
-		tx.End()
+		}
 	}
-	transaction.Release(tx)
 }
 
-func (d *dict) rehashStep(tx transaction.TX) {
+func (d *dict) rehashStep() {
 	if d.rehashIdx >= 0 && d.rehashIdx < len(d.tab[0].bucket) {
-		d.lockShard(tx, 0, d.shard(d.rehashIdx))
+		d.lockShard(0, d.shard(d.rehashIdx))
 		e := d.tab[0].bucket[d.rehashIdx]
 		if e == nil {
-			tx.Log(&d.rehashIdx)
+			txn("undo") {
 			d.rehashIdx++
+			}
 		} else {
 			i0 := d.rehashIdx
 			i1 := d.hashKey(e.key) & (d.tab[1].mask)
 			s0 := d.shard(i0)
 			s1 := d.shard(i1)
-
-			d.lockShard(tx, 1, s1)
-			tx.Log(e)
-			tx.Log(&d.tab[0].bucket[i0])
-			tx.Log(&d.tab[1].bucket[i1])
-			tx.Log(&d.tab[0].used[s0])
-			tx.Log(&d.tab[1].used[s1])
-
+			txn("undo") {
+			d.lockShard(1, s1)
 			next := e.next
 			e.next = d.tab[1].bucket[i1]
 			d.tab[0].bucket[i0] = next
 			d.tab[0].used[s0]--
 			d.tab[1].bucket[i1] = e
 			d.tab[1].used[s1]++
+			}
 		}
 	}
 	if d.rehashIdx == len(d.tab[0].bucket) {
@@ -262,33 +255,34 @@ func (d *dict) rehashStep(tx transaction.TX) {
 	}
 }
 
-func (d *dict) rehashSwap(tx transaction.TX) {
-	tx.Log(d)
+func (d *dict) rehashSwap() {
+	txn("undo") {
 	d.tab[0] = d.tab[1]
-	d.resetTable(tx, 1, 0)
+	d.resetTable(1, 0)
 	d.rehashIdx = -1
+	}
 	//fmt.Println("Rehash finished!")
 }
 
-func (d *dict) resizeIfNeeded(tx transaction.TX) (used, size0, size1 int) {
+func (d *dict) resizeIfNeeded() (used, size0, size1 int) {
 	size0 = len(d.tab[0].bucket)
 	used = d.size()
 
 	if used > size0 {
-		return used, size0, d.resize(tx, used)
+		return used, size0, d.resize(used)
 	} else if size0 > d.initSize && used < size0/Ratio {
-		return used, size0, d.resize(tx, used)
+		return used, size0, d.resize(used)
 	} else {
 		return used, size0, 0
 	}
 }
 
-func (d *dict) resize(tx transaction.TX, s int) int {
+func (d *dict) resize(s int) int {
 	s = nextPower(d.initSize, s)
-
-	d.resetTable(tx, 1, s)
-	tx.Log(&d.rehashIdx)
+	txn("undo") {
+	d.resetTable(1, s)
 	d.rehashIdx = 0
+	}
 	return s
 }
 
@@ -302,8 +296,9 @@ func nextPower(s1, s2 int) int {
 	return s1
 }
 
-func (d *dict) lockKey(tx transaction.TX, key []byte) {
-	tx.RLock(d.lock)
+func (d *dict) lockKey(key []byte) {
+	txn("undo") {
+	d.lock.RLock()
 	maxt := 0
 	if d.tab[1].mask > 0 {
 		maxt = 1
@@ -311,12 +306,14 @@ func (d *dict) lockKey(tx transaction.TX, key []byte) {
 
 	for t := 0; t <= maxt; t++ {
 		s := d.findShard(t, key)
-		d.lockShard(tx, t, s)
+		d.lockShard(t, s)
+	}
 	}
 }
 
-func (d *dict) lockKeys(tx transaction.TX, keys [][]byte, stride int) {
-	tx.RLock(d.lock)
+func (d *dict) lockKeys(keys [][]byte, stride int) {
+	txn("undo") {
+	d.lock.RLock()
 
 	maxt := 0
 	if d.tab[1].mask > 0 {
@@ -335,15 +332,17 @@ func (d *dict) lockKeys(tx transaction.TX, keys [][]byte, stride int) {
 		for _, s := range shards {
 			// only lock distinct shards
 			if s != prev {
-				d.lockShard(tx, t, s)
+				d.lockShard(t, s)
 				prev = s
 			}
 		}
 	}
+	}
 }
 
-func (d *dict) lockAllKeys(tx transaction.TX) {
-	tx.RLock(d.lock)
+func (d *dict) lockAllKeys() {
+	txn("undo") {
+	d.lock.RLock()
 
 	maxt := 0
 	if d.tab[1].mask > 0 {
@@ -352,8 +351,9 @@ func (d *dict) lockAllKeys(tx transaction.TX) {
 
 	for t := 0; t <= maxt; t++ {
 		for s := 0; s < d.shard(d.tab[t].mask+1); s++ {
-			d.lockShard(tx, t, s)
+			d.lockShard(t, s)
 		}
+	}
 	}
 }
 
@@ -361,10 +361,12 @@ func (d *dict) findShard(t int, key []byte) int {
 	return d.shard(d.hashKey(key) & d.tab[t].mask)
 }
 
-func (d *dict) lockShard(tx transaction.TX, t, s int) {
+func (d *dict) lockShard(t, s int) {
 	// ReadOnly commands will aquire readOnly tx and read locks, otherwise
 	// WLock is aquired.
-	tx.Lock(&d.tab[t].bucketlock[s])
+	txn("undo") {
+		d.tab[t].bucketlock[s].Lock()
+	}
 }
 
 func (d *dict) find(key []byte) (int, int, *entry, *entry) {
@@ -397,12 +399,13 @@ func (d *dict) find(key []byte) (int, int, *entry, *entry) {
 
 // key/value should be in pmem area, and appropriate locks should be already
 // aquired at command level.
-func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert bool) {
+func (d *dict) set(key []byte, value interface{}) (insert bool) {
 	t, b, _, e := d.find(key)
 
 	if e != nil {
-		tx.Log(&e.value)
+		txn("undo") {
 		e.value = value
+		}
 		return false
 	} else {
 		e2 := pnew(entry)
@@ -410,30 +413,29 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
 		runtime.FlushRange(unsafe.Pointer(e2), unsafe.Sizeof(*e2)) // shadow update
-		tx.Log(&d.tab[t].bucket[b])
+		txn("undo") {
 		d.tab[t].bucket[b] = e2
 		s := d.shard(b)
-		tx.Log(&d.tab[t].used[s])
 		d.tab[t].used[s]++
 		// fmt.Println("set entry: ", e2)
+		}
 		return true
 	}
 }
 
-func (d *dict) delete(tx transaction.TX, key []byte) *entry {
+func (d *dict) delete(key []byte) *entry {
 	t, b, p, e := d.find(key)
+	txn("undo") {
 	if e != nil { // note that gc should not recycle e before commit.
 		if p != nil {
-			tx.Log(p)
 			p.next = e.next
 		} else {
-			tx.Log(&d.tab[t].bucket[b])
 			d.tab[t].bucket[b] = e.next
 		}
 
 		s := d.shard(b)
-		tx.Log(&d.tab[t].used[s])
 		d.tab[t].used[s]--
+	}
 	}
 	return e
 }
@@ -456,11 +458,12 @@ func (t *table) size() int {
 	return s
 }
 
-func (d *dict) empty(tx transaction.TX) {
-	d.resetTable(tx, 0, d.initSize)
-	d.resetTable(tx, 1, 0)
-	tx.Log(&d.rehashIdx)
+func (d *dict) empty() {
+	txn("undo") {
+	d.resetTable(0, d.initSize)
+	d.resetTable(1, 0)
 	d.rehashIdx = -1
+	}
 }
 
 func (d *dict) randomKey() *entry {

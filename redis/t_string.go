@@ -9,6 +9,7 @@ import (
 	"math"
 	"strconv"
 	"time"
+	"github.com/vmware/go-pmem-transaction/transaction"
 )
 
 const (
@@ -90,9 +91,9 @@ func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, o
 		}
 	}
 
-	c.db.lockKeyWrite(c.tx, key)
-	if ((flags&OBJ_SET_NX) > 0 && c.db.lookupKeyWrite(c.tx, key) != nil) ||
-		((flags&OBJ_SET_XX) > 0 && c.db.lookupKeyWrite(c.tx, key) == nil) {
+	c.db.lockKeyWrite(key)
+	if ((flags&OBJ_SET_NX) > 0 && c.db.lookupKeyWrite(key) != nil) ||
+		((flags&OBJ_SET_XX) > 0 && c.db.lookupKeyWrite(key) == nil) {
 		if abortReply != nil {
 			c.addReply(abortReply)
 		} else {
@@ -101,10 +102,10 @@ func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, o
 		return
 	}
 
-	c.db.setKey(c.tx, shadowCopyToPmem(key), shadowCopyToPmemI(val))
+	c.db.setKey(shadowCopyToPmem(key), shadowCopyToPmemI(val))
 	if expire != nil {
 		when := time.Now().UnixNano() + ns
-		c.db.setExpire(c.tx, key, when)
+		c.db.setExpire(key, when)
 	}
 
 	if okReply != nil {
@@ -115,7 +116,7 @@ func setGeneric(c *client, flags int, key, val []byte, expire []byte, ms bool, o
 }
 
 func getCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
+	if c.db.lockKeyRead(c.argv[1]) {
 		getGeneric(c)
 	} else { // expired
 		c.addReply(shared.nullbulk)
@@ -123,15 +124,16 @@ func getCommand(c *client) {
 }
 
 func getsetCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
+	c.db.lockKeyWrite(c.argv[1])
 	if !getGeneric(c) {
 		return
 	}
-	c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
+	c.db.setKey(shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 }
 
 func getGeneric(c *client) bool {
-	v, ok := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.nullbulk, shared.wrongtypeerr)
+	i := c.db.lookupKeyRead(c.argv[1])
+	v, ok := c.getStringOrReply(i, shared.nullbulk, shared.wrongtypeerr)
 	if v != nil {
 		c.addReplyBulk(v)
 	}
@@ -148,8 +150,8 @@ func setrangeCommand(c *client) {
 		return
 	}
 	update := c.argv[3]
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+	c.db.lockKeyWrite(c.argv[1])
+	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.argv[1]), nil, shared.wrongtypeerr)
 	if !ok {
 		return
 	}
@@ -162,12 +164,13 @@ func setrangeCommand(c *client) {
 			return
 		}
 		if needed > len(v) {
-			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowConcatToPmemI(v, update, offset, needed))
+			c.db.setKey(shadowCopyToPmem(c.argv[1]), shadowConcatToPmemI(v, update, offset, needed))
 			c.addReplyLongLong(int64(needed))
 		} else {
-			c.tx.Log(v[offset:needed]) // inline update needs to be logged
-			copy(v[offset:], update)
+			txn("undo") {
+			copy(v[offset:], update) // TODO: (mohitv) copy not supported yet
 			c.addReplyLongLong(int64(len(v)))
+			}
 		}
 	}
 }
@@ -184,8 +187,8 @@ func getrangeCommand(c *client) {
 
 	var v []byte
 	var ok bool
-	if c.db.lockKeyRead(c.tx, c.argv[1]) { // not expired
-		v, ok = c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]), shared.emptybulk, shared.wrongtypeerr)
+	if c.db.lockKeyRead(c.argv[1]) { // not expired
+		v, ok = c.getStringOrReply(c.db.lookupKeyRead(c.argv[1]), shared.emptybulk, shared.wrongtypeerr)
 		if v == nil || !ok {
 			return
 		}
@@ -218,10 +221,10 @@ func getrangeCommand(c *client) {
 
 func mgetCommand(c *client) {
 	c.addReplyMultiBulkLen(c.argc - 1)
-	alives := c.db.lockKeysRead(c.tx, c.argv[1:], 1)
+	alives := c.db.lockKeysRead(c.argv[1:], 1)
 	for i, k := range c.argv[1:] {
 		if alives[i] {
-			v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, k), shared.nullbulk, shared.nullbulk)
+			v, _ := c.getStringOrReply(c.db.lookupKeyRead(k), shared.nullbulk, shared.nullbulk)
 			if v != nil {
 				c.addReplyBulk(v)
 			}
@@ -244,10 +247,10 @@ func msetGeneric(c *client, nx bool) {
 		c.addReplyError([]byte("wrong number of arguments for MSET"))
 		return
 	}
-	c.db.lockKeysWrite(c.tx, c.argv[1:], 2)
+	c.db.lockKeysWrite(c.argv[1:], 2)
 	if nx {
 		for i := 1; i < c.argc; i += 2 {
-			if c.db.lookupKeyWrite(c.tx, c.argv[i]) != nil {
+			if c.db.lookupKeyWrite(c.argv[i]) != nil {
 				c.addReply(shared.czero)
 				return
 			}
@@ -255,7 +258,7 @@ func msetGeneric(c *client, nx bool) {
 	}
 
 	for i := 1; i < c.argc; i += 2 {
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[i]), shadowCopyToPmemI(c.argv[i+1]))
+		c.db.setKey(shadowCopyToPmem(c.argv[i]), shadowCopyToPmemI(c.argv[i+1]))
 	}
 	if nx {
 		c.addReply(shared.cone)
@@ -266,14 +269,14 @@ func msetGeneric(c *client, nx bool) {
 
 func appendCommand(c *client) {
 	totlen := 0
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil, shared.wrongtypeerr)
+	c.db.lockKeyWrite(c.argv[1])
+	v, ok := c.getStringOrReply(c.db.lookupKeyWrite(c.argv[1]), nil, shared.wrongtypeerr)
 	if !ok {
 		return
 	}
 	if v == nil {
 		// Create the key
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
+		c.db.setKey(shadowCopyToPmem(c.argv[1]), shadowCopyToPmemI(c.argv[2]))
 		totlen = len(c.argv[2])
 	} else {
 		// Append the value
@@ -282,14 +285,14 @@ func appendCommand(c *client) {
 			return
 		}
 		// no need to copy c.argv[1] into pmem as we already know it exists in db in this case.
-		c.db.setKey(c.tx, c.argv[1], shadowConcatToPmemI(v, c.argv[2], len(v), totlen))
+		c.db.setKey(c.argv[1], shadowConcatToPmemI(v, c.argv[2], len(v), totlen))
 	}
 	c.addReplyLongLong(int64(totlen))
 }
 
 func strlenCommand(c *client) {
-	if c.db.lockKeyRead(c.tx, c.argv[1]) {
-		if v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.tx, c.argv[1]),
+	if c.db.lockKeyRead(c.argv[1]) {
+		if v, _ := c.getStringOrReply(c.db.lookupKeyRead(c.argv[1]),
 			shared.czero, shared.wrongtypeerr); v != nil {
 			c.addReplyLongLong(int64(len(v)))
 		}
@@ -327,8 +330,8 @@ func decrbyCommand(c *client) {
 }
 
 func incrDecrCommand(c *client, incr int64) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	if v, ok := c.getLongLongOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); ok {
+	c.db.lockKeyWrite(c.argv[1])
+	if v, ok := c.getLongLongOrReply(c.db.lookupKeyWrite(c.argv[1]), nil); ok {
 		if (incr < 0 && v < 0 && incr < (math.MinInt64-v)) ||
 			(incr > 0 && v > 0 && incr > (math.MaxInt64-v)) {
 			c.addReplyError([]byte("increment or decrement would overflow"))
@@ -338,21 +341,21 @@ func incrDecrCommand(c *client, incr int64) {
 		v += incr
 
 		// TODO: use shared integers?
-		c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
+		c.db.setKey(shadowCopyToPmem(c.argv[1]), v)
 		c.addReplyLongLong(v)
 	}
 }
 
 func incrbyfloatCommand(c *client) {
-	c.db.lockKeyWrite(c.tx, c.argv[1])
-	if v, ok := c.getLongDoubleOrReply(c.db.lookupKeyWrite(c.tx, c.argv[1]), nil); ok {
+	c.db.lockKeyWrite(c.argv[1])
+	if v, ok := c.getLongDoubleOrReply(c.db.lookupKeyWrite(c.argv[1]), nil); ok {
 		if incr, ok := c.getLongDoubleOrReply(c.argv[2], nil); ok {
 			v += incr
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				c.addReplyError([]byte("increment would produce NaN or Infinity"))
 				return
 			}
-			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), v)
+			c.db.setKey(shadowCopyToPmem(c.argv[1]), v)
 			c.addReplyBulk([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
 		}
 	}
