@@ -7,6 +7,7 @@ package redis
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/vmware/go-pmem-transaction/transaction"
 )
@@ -44,7 +45,7 @@ var (
 
 func quicklistCreate(tx transaction.TX) *quicklist {
 	ql := pnew(quicklist)
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	ql.fill = -2
 	return ql
 }
@@ -63,7 +64,7 @@ func quicklistCreateFromZiplist(tx transaction.TX, fill, compress int, zl *zipli
 
 func quicklistCreateNode(tx transaction.TX) *quicklistNode {
 	node := pnew(quicklistNode)
-	tx.Log(node)
+	tx.Log3(unsafe.Pointer(node), unsafe.Sizeof(*node))
 	node.zl = ziplistNew(tx)
 	return node
 }
@@ -74,7 +75,7 @@ func (ql *quicklist) SetOptions(tx transaction.TX, fill, compress int) {
 }
 
 func (ql *quicklist) SetFill(tx transaction.TX, fill int) {
-	tx.Log(&ql.fill)
+	tx.Log3(unsafe.Pointer(&ql.fill), unsafe.Sizeof(ql.fill))
 	if fill > 1<<15 {
 		fill = 1 << 15
 	} else if fill < -5 {
@@ -243,7 +244,7 @@ func (ql *quicklist) Push(tx transaction.TX, val interface{}, head bool) {
 }
 
 func (ql *quicklist) PushHead(tx transaction.TX, val interface{}) bool {
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	origHead := ql.head
 	if origHead.allowInsert(ql.fill, val) {
 		origHead.zl.Push(tx, val, true)
@@ -257,7 +258,7 @@ func (ql *quicklist) PushHead(tx transaction.TX, val interface{}) bool {
 }
 
 func (ql *quicklist) PushTail(tx transaction.TX, val interface{}) bool {
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	origTail := ql.tail
 	if origTail.allowInsert(ql.fill, val) {
 		origTail.zl.Push(tx, val, false)
@@ -279,7 +280,7 @@ func (ql *quicklist) InsertAfter(tx transaction.TX, entry *quicklistEntry, val i
 }
 
 func (ql *quicklist) Pop(tx transaction.TX, head bool) interface{} {
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	if ql.count == 0 {
 		return nil
 	}
@@ -331,7 +332,7 @@ func (ql *quicklist) DelRange(tx transaction.TX, start, count int) int {
 	}
 	node := entry.node
 	toDel := extent
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	for extent > 0 {
 		next := node.next
 		del := 0
@@ -377,14 +378,14 @@ func (ql *quicklist) insertNodeAfter(tx transaction.TX, oldNode, newNode *quickl
 
 // ql should be logged outside this call.
 func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNode, after bool) {
-	tx.Log(newNode)
+	tx.Log3(unsafe.Pointer(newNode), unsafe.Sizeof(*newNode))
 	if after {
 		newNode.prev = oldNode
 		if oldNode != nil {
-			tx.Log(oldNode)
+			tx.Log3(unsafe.Pointer(oldNode), unsafe.Sizeof(*oldNode))
 			newNode.next = oldNode.next
 			if oldNode.next != nil {
-				tx.Log(oldNode.next)
+				tx.Log3(unsafe.Pointer(oldNode.next), unsafe.Sizeof(*(oldNode.next)))
 				oldNode.next.prev = newNode
 			}
 			oldNode.next = newNode
@@ -395,10 +396,10 @@ func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNo
 	} else {
 		newNode.next = oldNode
 		if oldNode != nil {
-			tx.Log(oldNode)
+			tx.Log3(unsafe.Pointer(oldNode), unsafe.Sizeof(*oldNode))
 			newNode.prev = oldNode.prev
 			if oldNode.prev != nil {
-				tx.Log(oldNode.prev)
+				tx.Log3(unsafe.Pointer(oldNode.prev), unsafe.Sizeof(*(oldNode.prev)))
 				oldNode.prev.next = newNode
 			}
 			oldNode.prev = newNode
@@ -418,7 +419,7 @@ func (ql *quicklist) insertNode(tx transaction.TX, oldNode, newNode *quicklistNo
 }
 
 func (ql *quicklist) insert(tx transaction.TX, entry *quicklistEntry, val interface{}, after bool) {
-	tx.Log(ql)
+	tx.Log3(unsafe.Pointer(ql), unsafe.Sizeof(*ql))
 	node := entry.node
 	if node == nil {
 		newNode := quicklistCreateNode(tx)
@@ -470,7 +471,7 @@ func (ql *quicklist) insert(tx transaction.TX, entry *quicklistEntry, val interf
 	} else if full && ((atTail && node.next != nil && fullNext) || (atHead && node.prev != nil && fullPrev)) {
 		// create a new node
 		newNode := quicklistCreateNode(tx)
-		tx.Log(newNode)
+		tx.Log3(unsafe.Pointer(newNode), unsafe.Sizeof(*newNode))
 		newNode.zl = ziplistNew(tx)
 		newNode.zl.Push(tx, val, false)
 		ql.insertNode(tx, node, newNode, after)
@@ -527,7 +528,7 @@ func (node *quicklistNode) allowInsert(fill int, val interface{}) bool {
 func (node *quicklistNode) split(tx transaction.TX, offset int, after bool) *quicklistNode {
 	newNode := quicklistCreateNode(tx)
 	// copy the whole zl into new node
-	tx.Log(newNode)
+	tx.Log3(unsafe.Pointer(newNode), unsafe.Sizeof(*newNode))
 	newNode.zl = node.zl.deepCopy(tx)
 
 	// remove dup entries in two nodes
@@ -597,7 +598,7 @@ func (ql *quicklist) allowNodeMerge(a, b *quicklistNode, fill int) bool {
 // ql should be logged outside the call.
 func (ql *quicklist) ziplistMerge(tx transaction.TX, a, b *quicklistNode) *quicklistNode {
 	a.zl.Merge(tx, b.zl)
-	tx.Log(b.zl)
+	tx.Log3(unsafe.Pointer(b.zl), unsafe.Sizeof(*(b.zl)))
 	b.zl.entries = 0
 	ql.delNode(tx, b)
 	return a
@@ -621,7 +622,7 @@ func nodeSizeMeetOptimizationRequirement(sz, fill int) bool {
 
 // ql should be logged outside the call.
 func (ql *quicklist) delIndex(tx transaction.TX, node *quicklistNode, pos int) bool {
-	tx.Log(node)
+	tx.Log3(unsafe.Pointer(node), unsafe.Sizeof(*node))
 	deleteNode := false
 	node.zl.Delete(tx, pos)
 	if node.zl.entries == 0 {
@@ -635,11 +636,11 @@ func (ql *quicklist) delIndex(tx transaction.TX, node *quicklistNode, pos int) b
 // ql should be logged outside this call.
 func (ql *quicklist) delNode(tx transaction.TX, node *quicklistNode) {
 	if node.next != nil {
-		tx.Log(node.next)
+		tx.Log3(unsafe.Pointer(node.next), unsafe.Sizeof(*(node.next)))
 		node.next.prev = node.prev
 	}
 	if node.prev != nil {
-		tx.Log(node.prev)
+		tx.Log3(unsafe.Pointer(node.prev), unsafe.Sizeof(*(node.prev)))
 		node.prev.next = node.next
 	}
 

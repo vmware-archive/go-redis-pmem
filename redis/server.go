@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/vmware/go-pmem-transaction/pmem"
 	"github.com/vmware/go-pmem-transaction/transaction"
@@ -204,7 +205,7 @@ func (s *server) Start() {
 func populateDb(db *redisDb) {
 	tx := transaction.NewUndoTx()
 	tx.Begin()
-	tx.Log(db)
+	tx.Log3(unsafe.Pointer(db), unsafe.Sizeof(*db))
 	db.dict = NewDict(tx, 1024, 32)
 	db.expire = NewDict(tx, 128, 1)
 	db.magic = MAGIC

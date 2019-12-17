@@ -198,7 +198,7 @@ func (zl *ziplist) Merge(tx transaction.TX, zl2 *ziplist) {
 	if zl == zl2 {
 		return // do not allow merge self
 	}
-	tx.Log(zl)
+	tx.Log3(unsafe.Pointer(zl), unsafe.Sizeof(*zl))
 	// update entries and new tail position
 	zl.entries += zl2.entries
 	oldtail := zl.zltail
@@ -242,7 +242,7 @@ func (zl *ziplist) insert(tx transaction.TX, pos int, val interface{}) {
 	// fmt.Println("newentry", len(entry), entry)
 
 	// insert entry into zl
-	tx.Log(zl)
+	tx.Log3(unsafe.Pointer(zl), unsafe.Sizeof(*zl))
 	// TODO: implement persistent append/realloc/memmove. Currently always copy to newly allocated slice
 	newdata := pmake([]byte, len(zl.data)+len(entry))
 	tailShift := 0
@@ -272,7 +272,7 @@ func (zl *ziplist) delete(tx transaction.TX, pos int, num uint) {
 		deleted++
 	}
 	if deleted > 0 {
-		tx.Log(zl)
+		tx.Log3(unsafe.Pointer(zl), unsafe.Sizeof(*zl))
 		zl.entries -= deleted
 		prevlensize, prevlen := zipEntryPrevlen(zl.data[pos:])
 		if end == -1 {
@@ -528,7 +528,7 @@ func (zl *ziplist) deepCopy(tx transaction.TX) *ziplist {
 	newdata := pmake([]byte, zl.Len())
 	copy(newdata, zl.data)
 	runtime.FlushRange(unsafe.Pointer(&newdata[0]), uintptr(len(newdata)))
-	tx.Log(newzl)
+	tx.Log3(unsafe.Pointer(newzl), unsafe.Sizeof(*newzl))
 	newzl.entries = zl.entries
 	newzl.zltail = zl.zltail
 	newzl.data = newdata

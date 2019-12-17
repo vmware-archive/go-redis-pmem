@@ -68,7 +68,7 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 	d := pnew(dict)
 
 	tx.Begin()
-	tx.Log(d)
+	tx.Log3(unsafe.Pointer(d), unsafe.Sizeof(*d))
 	d.initSize = nextPower(1, initSize)
 	// TODO: add -1 value to indicate ALWAYS set bucketPerShard to dict size.
 	if bucketPerShard >= initSize || bucketPerShard <= 0 {
@@ -86,7 +86,7 @@ func NewDict(tx transaction.TX, initSize, bucketPerShard int) *dict {
 }
 
 func (d *dict) resetTable(tx transaction.TX, i int, s int) {
-	tx.Log(d.tab[i:])
+	tx.Log3(unsafe.Pointer(&d.tab[i]), unsafe.Sizeof(d.tab[i]))
 	if s == 0 {
 		d.tab[i].bucketlock = nil
 		d.tab[i].bucket = nil
@@ -234,7 +234,7 @@ func (d *dict) rehashStep(tx transaction.TX) {
 		d.lockShard(tx, 0, d.shard(d.rehashIdx))
 		e := d.tab[0].bucket[d.rehashIdx]
 		if e == nil {
-			tx.Log(&d.rehashIdx)
+			tx.Log3(unsafe.Pointer(&d.rehashIdx), unsafe.Sizeof(d.rehashIdx))
 			d.rehashIdx++
 		} else {
 			i0 := d.rehashIdx
@@ -243,11 +243,11 @@ func (d *dict) rehashStep(tx transaction.TX) {
 			s1 := d.shard(i1)
 
 			d.lockShard(tx, 1, s1)
-			tx.Log(e)
-			tx.Log(&d.tab[0].bucket[i0])
-			tx.Log(&d.tab[1].bucket[i1])
-			tx.Log(&d.tab[0].used[s0])
-			tx.Log(&d.tab[1].used[s1])
+			tx.Log3(unsafe.Pointer(e), unsafe.Sizeof(*e))
+			tx.Log3(unsafe.Pointer(&d.tab[0].bucket[i0]), unsafe.Sizeof(d.tab[0].bucket[i0]))
+			tx.Log3(unsafe.Pointer(&d.tab[1].bucket[i1]), unsafe.Sizeof(d.tab[1].bucket[i1]))
+			tx.Log3(unsafe.Pointer(&d.tab[0].used[s0]), unsafe.Sizeof(d.tab[0].used[s0]))
+			tx.Log3(unsafe.Pointer(&d.tab[1].used[s1]), unsafe.Sizeof(d.tab[1].used[s1]))
 
 			next := e.next
 			e.next = d.tab[1].bucket[i1]
@@ -263,7 +263,7 @@ func (d *dict) rehashStep(tx transaction.TX) {
 }
 
 func (d *dict) rehashSwap(tx transaction.TX) {
-	tx.Log(d)
+	tx.Log3(unsafe.Pointer(d), unsafe.Sizeof(*d))
 	d.tab[0] = d.tab[1]
 	d.resetTable(tx, 1, 0)
 	d.rehashIdx = -1
@@ -287,7 +287,7 @@ func (d *dict) resize(tx transaction.TX, s int) int {
 	s = nextPower(d.initSize, s)
 
 	d.resetTable(tx, 1, s)
-	tx.Log(&d.rehashIdx)
+	tx.Log3(unsafe.Pointer(&d.rehashIdx), unsafe.Sizeof(d.rehashIdx))
 	d.rehashIdx = 0
 	return s
 }
@@ -401,7 +401,7 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 	t, b, _, e := d.find(key)
 
 	if e != nil {
-		tx.Log(&e.value)
+		tx.Log3(unsafe.Pointer(&e.value), unsafe.Sizeof(e.value))
 		e.value = value
 		return false
 	} else {
@@ -410,10 +410,10 @@ func (d *dict) set(tx transaction.TX, key []byte, value interface{}) (insert boo
 		e2.value = value
 		e2.next = d.tab[t].bucket[b]
 		runtime.FlushRange(unsafe.Pointer(e2), unsafe.Sizeof(*e2)) // shadow update
-		tx.Log(&d.tab[t].bucket[b])
+		tx.Log3(unsafe.Pointer(&d.tab[t].bucket[b]), unsafe.Sizeof(d.tab[t].bucket[b]))
 		d.tab[t].bucket[b] = e2
 		s := d.shard(b)
-		tx.Log(&d.tab[t].used[s])
+		tx.Log3(unsafe.Pointer(&d.tab[t].used[s]), unsafe.Sizeof(d.tab[t].used[s]))
 		d.tab[t].used[s]++
 		// fmt.Println("set entry: ", e2)
 		return true
@@ -424,15 +424,15 @@ func (d *dict) delete(tx transaction.TX, key []byte) *entry {
 	t, b, p, e := d.find(key)
 	if e != nil { // note that gc should not recycle e before commit.
 		if p != nil {
-			tx.Log(p)
+			tx.Log3(unsafe.Pointer(p), unsafe.Sizeof(*p))
 			p.next = e.next
 		} else {
-			tx.Log(&d.tab[t].bucket[b])
+			tx.Log3(unsafe.Pointer(&d.tab[t].bucket[b]), unsafe.Sizeof(d.tab[t].bucket[b]))
 			d.tab[t].bucket[b] = e.next
 		}
 
 		s := d.shard(b)
-		tx.Log(&d.tab[t].used[s])
+		tx.Log3(unsafe.Pointer(&d.tab[t].used[s]), unsafe.Sizeof(d.tab[t].used[s]))
 		d.tab[t].used[s]--
 	}
 	return e
@@ -459,7 +459,7 @@ func (t *table) size() int {
 func (d *dict) empty(tx transaction.TX) {
 	d.resetTable(tx, 0, d.initSize)
 	d.resetTable(tx, 1, 0)
-	tx.Log(&d.rehashIdx)
+	tx.Log3(unsafe.Pointer(&d.rehashIdx), unsafe.Sizeof(d.rehashIdx))
 	d.rehashIdx = -1
 }
 

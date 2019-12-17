@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"unsafe"
 
 	"github.com/vmware/go-pmem-transaction/transaction"
 )
@@ -258,7 +259,7 @@ func hashTypeSet(c *client, o interface{}, field []byte, value interface{}) bool
 	case *dict:
 		_, _, _, de := d.find(field)
 		if de != nil {
-			c.tx.Log(&de.value)
+			c.tx.Log3(unsafe.Pointer(&de.value), unsafe.Sizeof(de.value))
 			de.value = value
 			update = true
 		} else {

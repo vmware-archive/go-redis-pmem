@@ -9,6 +9,7 @@ import (
 	"math"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -165,8 +166,12 @@ func setrangeCommand(c *client) {
 			c.db.setKey(c.tx, shadowCopyToPmem(c.argv[1]), shadowConcatToPmemI(v, update, offset, needed))
 			c.addReplyLongLong(int64(needed))
 		} else {
-			c.tx.Log(v[offset:needed]) // inline update needs to be logged
-			copy(v[offset:], update)
+			// copy(v[offset:], update) // TODO: Support copy!
+			for i := 0; i < len(update); i++ {
+				c.tx.Log3(unsafe.Pointer(&v[offset+i]), unsafe.Sizeof(v[offset+i]))
+				v[offset+i] = update[i]
+			}
+
 			c.addReplyLongLong(int64(len(v)))
 		}
 	}

@@ -1029,7 +1029,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 					tmp := zval.zuiNewSdsFromValue()
 					accumulator.set(c.tx, tmp, score)
 				} else {
-					c.tx.Log(de)
+					c.tx.Log3(unsafe.Pointer(de), unsafe.Sizeof(*de))
 					de.value = zuinionInterAggregate(de.value.(float64), score, aggregate)
 				}
 			}
@@ -1040,7 +1040,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 		for de := di.next(); de != nil; de = di.next() {
 			dstzset.zsl.insert(c.tx, de.value.(float64), de.key)
 		}
-		c.tx.Log(&dstzset.dict)
+		c.tx.Log3(unsafe.Pointer(&dstzset.dict), unsafe.Sizeof(dstzset.dict))
 		dstzset.dict = accumulator
 	} else {
 		panic("Unknown operator")
@@ -1057,7 +1057,7 @@ func zunionInterGenericCommand(c *client, dstkey []byte, op int) {
 // ============== common zset api ====================
 func zsetCreate(tx transaction.TX) *zset {
 	zs := pnew(zset)
-	tx.Log(zs)
+	tx.Log3(unsafe.Pointer(zs), unsafe.Sizeof(*zs))
 	zs.dict = NewDict(tx, 4, 4)
 	zs.zsl = zslCreate(tx)
 	return zs
@@ -1096,7 +1096,7 @@ func zsetAdd(c *client, zobj interface{}, score float64, ele []byte, flags int) 
 			if score != curscore {
 				node := zs.zsl.delete(c.tx, curscore, ele)
 				zs.zsl.insert(c.tx, score, node.ele)
-				c.tx.Log(de)
+				c.tx.Log3(unsafe.Pointer(de), unsafe.Sizeof(*de))
 				// Change dictionary value to directly store score value instead
 				// of pointer to score in zsl.
 				de.value = score
@@ -1188,7 +1188,7 @@ func zsetRank(zobj interface{}, ele []byte, reverse bool) (uint, bool) {
 
 func zslCreate(tx transaction.TX) *zskiplist {
 	zsl := pnew(zskiplist)
-	tx.Log(zsl)
+	tx.Log3(unsafe.Pointer(zsl), unsafe.Sizeof(*zsl))
 	zsl.level = 1
 	zsl.length = 0
 	zsl.header = zslCreateNode(tx, ZSKIPLIST_MAXLEVEL, 0, nil)
@@ -1197,7 +1197,7 @@ func zslCreate(tx transaction.TX) *zskiplist {
 
 func zslCreateNode(tx transaction.TX, level int, score float64, ele []byte) *zskiplistNode {
 	zn := pnew(zskiplistNode)
-	tx.Log(zn)
+	tx.Log3(unsafe.Pointer(zn), unsafe.Sizeof(*zn))
 	zn.score = score
 	zn.ele = ele
 	zn.level = pmake([]zskiplistLevel, level)
@@ -1359,23 +1359,25 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 	// scores, reinserting the same element should never happen since the
 	// caller of zslInsert() should test in the hash table if the element is
 	// already inside or not.
-	tx.Log(zsl)
+	tx.Log3(unsafe.Pointer(zsl), unsafe.Sizeof(*zsl))
 	level := zslRandomLevel()
 	if level > zsl.level {
-		tx.Log(zsl.header.level[zsl.level:])
+		// tx.Log(zsl.header.level[zsl.level:]) // TODO: Log3 can't support this?
 		for i := zsl.level; i < level; i++ {
 			rank[i] = 0
 			update[i] = zsl.header
+			tx.Log3(unsafe.Pointer(&zsl.header.level[zsl.level+i]), unsafe.Sizeof(zsl.header.level[zsl.level+i]))
 			update[i].level[i].span = zsl.length
 		}
 		zsl.level = level
 	}
 	x = zslCreateNode(tx, level, score, ele)
-	tx.Log(x)
-	tx.Log(x.level)
+	tx.Log3(unsafe.Pointer(x), unsafe.Sizeof(*x))
+	// tx.Log(x.level) //TODO: Log3 can't support this?
 	for i := 0; i < level; i++ {
+		tx.Log3(unsafe.Pointer(&x.level[i]), unsafe.Sizeof(x.level[i]))
 		x.level[i].forward = update[i].level[i].forward
-		tx.Log(&update[i].level[i])
+		tx.Log3(unsafe.Pointer(&update[i].level[i]), unsafe.Sizeof(update[i].level[i]))
 		update[i].level[i].forward = x
 
 		// update span covered by update[i] as x is inserted here
@@ -1394,7 +1396,7 @@ func (zsl *zskiplist) insert(tx transaction.TX, score float64, ele []byte) *zski
 		x.backward = update[0]
 	}
 	if x.level[0].forward != nil {
-		tx.Log(&x.level[0].forward.backward)
+		tx.Log3(unsafe.Pointer(&x.level[0].forward.backward), unsafe.Sizeof(x.level[0].forward.backward))
 		x.level[0].forward.backward = x
 	} else {
 		zsl.tail = x
@@ -1427,7 +1429,7 @@ func (zsl *zskiplist) delete(tx transaction.TX, score float64, ele []byte) *zski
 
 func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*zskiplistNode) {
 	for i := 0; i < zsl.level; i++ {
-		tx.Log(&update[i].level[i])
+		tx.Log3(unsafe.Pointer(&update[i].level[i]), unsafe.Sizeof(update[i].level[i]))
 		if update[i].level[i].forward == x {
 			update[i].level[i].span += x.level[i].span - 1
 			update[i].level[i].forward = x.level[i].forward
@@ -1436,9 +1438,9 @@ func (zsl *zskiplist) deleteNode(tx transaction.TX, x *zskiplistNode, update []*
 		}
 	}
 
-	tx.Log(zsl)
+	tx.Log3(unsafe.Pointer(zsl), unsafe.Sizeof(*zsl))
 	if x.level[0].forward != nil {
-		tx.Log(&x.level[0].forward.backward)
+		tx.Log3(unsafe.Pointer(&x.level[0].forward.backward), unsafe.Sizeof(x.level[0].forward.backward))
 		x.level[0].forward.backward = x.backward
 	} else {
 		zsl.tail = x.backward
