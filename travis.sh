@@ -32,7 +32,7 @@ do
     fi
     for j in {1..2}
     do
-        GOROOT="$HOME/go-pmem/" GOTOOLDIR="$HOME/go-pmem/pkg/tool/linux_amd64" ~/go-pmem/bin/go test -tags="consistency" -v # run j
+        GOROOT="$HOME/go-pmem/" GOTOOLDIR="$HOME/go-pmem/pkg/tool/linux_amd64" ~/go-pmem/bin/go test -txn -tags="consistency" -v # run j
         sleep 1
     done
 done
