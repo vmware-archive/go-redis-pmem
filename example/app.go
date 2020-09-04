@@ -5,8 +5,16 @@
 
 package main
 
-import "github.com/vmware-samples/go-redis-pmem/redis"
+import (
+	"log"
+	"os"
+
+	"github.com/vmware-samples/go-redis-pmem/redis"
+)
 
 func main() {
-	redis.RunServer()
+	if len(os.Args) != 2 {
+		log.Fatalf("Usage: ./app <dbName>")
+	}
+	redis.RunServer(os.Args[1])
 }
