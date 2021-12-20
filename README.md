@@ -1,5 +1,8 @@
 # go-redis-pmem
 
+## Warning
+VMware has ended active development of this project, this repository will no longer be updated.
+
 ## Overview
 This is a Go implementation of Redis designed for persistent memory. Only a
 limited subset of Redis commands are currently supported.
