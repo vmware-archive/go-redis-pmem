@@ -19,7 +19,8 @@ are maintained in a separate repository [here](https://github.com/jerrinsg/go-pm
 1. Download and build Go compiler designed for persistent memory. Follow
 instructions [here](https://github.com/jerrinsg/go-pmem).
 
-2. ```go get -v -u github.com/vmware-samples/go-redis-pmem/...```
+2. ```go get -v -u github.com/vmware-archive/go-redis-pmem/...```
+
 Make sure to use the Go binary built in step 1.
 
 3. To build and run the example application
